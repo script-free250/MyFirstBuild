@@ -1,430 +1,203 @@
-#include "ui.h"
 #include "imgui/imgui.h"
-#include <Windows.h>
-#include <mmsystem.h>
-#include <string>
-#include <vector>
-#include <map>
-#include <chrono>
-#include <random>
-#include <thread>
-#include <atomic>
-#include <mutex>
+#include "imgui/imgui_impl_win32.h"
+#include "imgui/imgui_impl_dx11.h"
+#include <d3d11.h>
+#include <tchar.h>
+#include "ui.h" // يحتوي على دوال الهوك والمنطق
 
-#pragma comment(lib, "winmm.lib")
+// --- بيانات DirectX ---
+static ID3D11Device* g_pd3dDevice = NULL;
+static ID3D11DeviceContext* g_pd3dDeviceContext = NULL;
+static IDXGISwapChain* g_pSwapChain = NULL;
+static ID3D11RenderTargetView* g_mainRenderTargetView = NULL;
 
-// --- Constants ---
-#ifndef MAGIC_SIGNATURE
-#define MAGIC_SIGNATURE 0xFF00AA55
-#endif
+// تعريفات الدوال المساعدة
+bool CreateDeviceD3D(HWND hWnd);
+void CleanupDeviceD3D();
+void CreateRenderTarget();
+void CleanupRenderTarget();
 
-// --- Global Config ---
-bool g_jitter_enabled = false;
-int g_jitter_intensity = 2;
-bool g_sound_enabled = false;
-int g_max_cps_limit = 20; 
-int g_current_theme = 0; 
+// معالج رسائل ويندوز الخارجي (من مكتبة ImGui)
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-// --- CPS Test ---
-std::atomic<int> g_cps_clicks = 0;
-double g_cps_result = 0.0;
-DWORD g_cps_start_time = 0;
-bool g_cps_active = false;
+// معالج الرسائل الرئيسي
+LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+        return true;
 
-// --- State & Threading ---
-struct ClickState {
-    bool isDown;
-    std::chrono::steady_clock::time_point nextActionTime;
-};
-
-std::map<int, std::vector<KeyAction>> g_complex_mappings;
-std::map<int, bool> g_physical_key_status;
-std::map<int, float> g_key_states;
-std::map<int, ClickState> g_rapid_states;
-
-// Mutex to protect shared maps
-std::mutex g_map_mutex;
-
-// Threading Control
-std::atomic<bool> g_logic_running = false;
-std::thread g_logic_thread;
-
-int g_last_vk_code = 0;
-std::string g_last_key_name = "None";
-AppState g_app_state = AppState::Dashboard;
-
-// Wizard
-int g_wiz_source_key = -1;
-int g_wiz_target_key = -1;
-int g_wiz_delay = 50;
-bool g_wiz_is_rapid = false;
-bool g_wiz_swap_keys = false;
-
-HHOOK g_hKeyboardHook = NULL;
-HHOOK g_hMouseHook = NULL;
-
-// --- Helper Functions ---
-int GetRandomInt(int min, int max) {
-    static thread_local std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int> dist(min, max);
-    return dist(rng);
-}
-
-std::string GetKeyNameSmart(int vkCode) {
-    switch (vkCode) {
-    case VK_LBUTTON: return "Left Click";
-    case VK_RBUTTON: return "Right Click";
-    case VK_MBUTTON: return "Middle Click";
-    case VK_XBUTTON1: return "Mouse Side 1";
-    case VK_XBUTTON2: return "Mouse Side 2";
-    }
-    char keyNameBuffer[128];
-    UINT scanCode = MapVirtualKey(vkCode, MAPVK_VK_TO_VSC);
-    if (GetKeyNameTextA(scanCode << 16, keyNameBuffer, 128)) return std::string(keyNameBuffer);
-    return "VK_" + std::to_string(vkCode);
-}
-
-void ExecuteSendInput(int vkCode, bool isUp) {
-    INPUT input = {};
-    if (vkCode >= VK_LBUTTON && vkCode <= VK_XBUTTON2) {
-        input.type = INPUT_MOUSE;
-        if (vkCode == VK_LBUTTON) input.mi.dwFlags = isUp ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_LEFTDOWN;
-        else if (vkCode == VK_RBUTTON) input.mi.dwFlags = isUp ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_RIGHTDOWN;
-        else if (vkCode == VK_MBUTTON) input.mi.dwFlags = isUp ? MOUSEEVENTF_MIDDLEUP : MOUSEEVENTF_MIDDLEDOWN;
-        else if (vkCode == VK_XBUTTON1) { input.mi.dwFlags = isUp ? MOUSEEVENTF_XUP : MOUSEEVENTF_XDOWN; input.mi.mouseData = XBUTTON1; }
-        else if (vkCode == VK_XBUTTON2) { input.mi.dwFlags = isUp ? MOUSEEVENTF_XUP : MOUSEEVENTF_XDOWN; input.mi.mouseData = XBUTTON2; }
-        
-        if (!isUp && g_jitter_enabled) {
-            input.mi.dx = GetRandomInt(-g_jitter_intensity, g_jitter_intensity);
-            input.mi.dy = GetRandomInt(-g_jitter_intensity, g_jitter_intensity);
-            input.mi.dwFlags |= MOUSEEVENTF_MOVE;
-        }
-        input.mi.dwExtraInfo = MAGIC_SIGNATURE;
-    } else {
-        input.type = INPUT_KEYBOARD;
-        input.ki.wVk = vkCode;
-        input.ki.dwFlags = isUp ? KEYEVENTF_KEYUP : 0;
-        input.ki.dwExtraInfo = MAGIC_SIGNATURE;
-    }
-    SendInput(1, &input, sizeof(INPUT));
-    
-    // Sound Limiter (Prevents audio lag)
-    if (!isUp && g_sound_enabled) {
-        static DWORD lastSoundTime = 0;
-        DWORD now = GetTickCount();
-        if (now - lastSoundTime > 50) { // Max 20 sounds per sec
-            PlaySoundA("SystemDefault", NULL, SND_ASYNC | SND_NODEFAULT | SND_NOSTOP);
-            lastSoundTime = now;
-        }
-    }
-}
-
-// --- Threaded Logic (NO LAG) ---
-void LogicThreadFunc() {
-    while (g_logic_running) {
-        auto now = std::chrono::steady_clock::now();
-        bool didWork = false;
-
+    switch (msg)
+    {
+    case WM_SIZE:
+        if (g_pd3dDevice != NULL && wParam != SIZE_MINIMIZED)
         {
-            // Lock map for thread safety
-            std::lock_guard<std::mutex> lock(g_map_mutex);
-            
-            for (auto& [sourceKey, actions] : g_complex_mappings) {
-                if (g_physical_key_status[sourceKey]) { // User is holding key
-                    for (auto& action : actions) {
-                        if (action.type == ActionType::RapidFire) {
-                            
-                            // Init state
-                            if (g_rapid_states.find(action.targetVk) == g_rapid_states.end()) {
-                                g_rapid_states[action.targetVk] = { false, now };
-                            }
-
-                            ClickState& state = g_rapid_states[action.targetVk];
-
-                            if (now >= state.nextActionTime) {
-                                if (!state.isDown) {
-                                    // PRESS
-                                    ExecuteSendInput(action.targetVk, false);
-                                    state.isDown = true;
-                                    // Hold time 20-40ms
-                                    state.nextActionTime = now + std::chrono::milliseconds(GetRandomInt(20, 40));
-                                    
-                                    // Update visual state (safe copy?)
-                                    // Direct access to g_key_states is risky for UI, but float write is atomic-ish on x86
-                                    // We will skip visual update here to be 100% safe, or use atomic
-                                } 
-                                else {
-                                    // RELEASE
-                                    ExecuteSendInput(action.targetVk, true);
-                                    state.isDown = false;
-                                    
-                                    int delay = action.delayMs;
-                                    // Safety Clamp
-                                    if (delay < 15) delay = 15; // Minimum 15ms to prevent freeze
-
-                                    if (g_max_cps_limit > 0) {
-                                        int minDelay = 1000 / g_max_cps_limit;
-                                        if (delay < minDelay) delay = minDelay;
-                                    }
-                                    state.nextActionTime = now + std::chrono::milliseconds(delay + GetRandomInt(0, 5));
-                                }
-                                didWork = true;
-                            }
-                        }
-                    }
-                } else {
-                    // Cleanup stuck keys
-                    for (auto& action : actions) {
-                        if (action.type == ActionType::RapidFire) {
-                            if (g_rapid_states.count(action.targetVk) && g_rapid_states[action.targetVk].isDown) {
-                                 ExecuteSendInput(action.targetVk, true);
-                                 g_rapid_states[action.targetVk].isDown = false;
-                            }
-                        }
-                    }
-                }
-            }
+            CleanupRenderTarget();
+            g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
+            CreateRenderTarget();
         }
-
-        // Sleep to save CPU
-        if (didWork) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
+        return 0;
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU) // تعطيل قائمة الزر الأيمن في العنوان لمنع التوقف
+            return 0;
+        break;
+    case WM_DESTROY:
+        ::PostQuitMessage(0);
+        return 0;
     }
+    return ::DefWindowProc(hWnd, msg, wParam, lParam);
 }
 
-// Called by Main Loop (for visuals only)
-void ProcessInputLogic() {
-    std::lock_guard<std::mutex> lock(g_map_mutex);
-    // Animation Decay
-    for (auto& pair : g_key_states) {
-        if (pair.second > 0.0f) pair.second -= 0.05f;
-        if (pair.second < 0.0f) pair.second = 0.0f;
-    }
-}
+// نقطة الدخول الرئيسية
+int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
+{
+    // 1. إنشاء نافذة التطبيق
+    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("ImGui App"), NULL };
+    ::RegisterClassEx(&wc);
+    HWND hwnd = ::CreateWindow(wc.lpszClassName, _T("Ultimate Input Remapper (Lite)"), WS_OVERLAPPEDWINDOW, 100, 100, 1000, 700, NULL, NULL, wc.hInstance, NULL);
 
-// --- Hook Logic ---
-bool HandleHookLogic(int vkCode, bool isUp) {
-    if (!isUp) {
-        if (g_app_state == AppState::Wizard_WaitForOriginal) {
-            g_wiz_source_key = vkCode;
-            g_app_state = AppState::Wizard_WaitForTarget;
-            return true; 
-        }
-        else if (g_app_state == AppState::Wizard_WaitForTarget) {
-            g_wiz_target_key = vkCode;
-            g_app_state = AppState::Wizard_Configure;
-            return true; 
-        }
+    // 2. تهيئة DirectX
+    if (!CreateDeviceD3D(hwnd))
+    {
+        CleanupDeviceD3D();
+        ::UnregisterClass(wc.lpszClassName, wc.hInstance);
+        return 1;
     }
 
-    // Lock for map access
-    std::unique_lock<std::mutex> lock(g_map_mutex, std::try_to_lock);
-    if (lock.owns_lock()) {
-        if (g_complex_mappings.count(vkCode)) {
-            g_physical_key_status[vkCode] = !isUp;
-            
-            auto& actions = g_complex_mappings[vkCode];
-            for (auto& action : actions) {
-                if (action.type == ActionType::SinglePress) {
-                    // Send Input immediately for Single Press
-                    ExecuteSendInput(action.targetVk, isUp);
-                    if (!isUp) g_key_states[action.targetVk] = 1.0f;
-                }
-            }
-            return true; // Block original
-        }
-    }
+    // إظهار النافذة
+    ::ShowWindow(hwnd, nCmdShow);
+    ::UpdateWindow(hwnd);
 
-    if (!isUp) {
-        g_key_states[vkCode] = 1.0f;
-        g_last_vk_code = vkCode;
-        g_last_key_name = GetKeyNameSmart(vkCode);
-        
-        if (g_cps_active) {
-            if (g_cps_start_time == 0) g_cps_start_time = GetTickCount();
-            g_cps_clicks++;
-            DWORD elapsed = GetTickCount() - g_cps_start_time;
-            if (elapsed >= 1000) {
-                g_cps_result = (double)g_cps_clicks / (elapsed / 1000.0);
-                g_cps_clicks = 0;
-                g_cps_start_time = GetTickCount();
-            }
-        }
-    }
-    return false; 
-}
+    // 3. إعداد ImGui
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // تفعيل التنقل بالكيبورد
 
-// --- Callbacks ---
-LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    if (nCode >= 0) {
-        KBDLLHOOKSTRUCT* p = (KBDLLHOOKSTRUCT*)lParam;
-        if (p->dwExtraInfo == MAGIC_SIGNATURE) return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
-        bool isUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
-        if (HandleHookLogic(p->vkCode, isUp)) return 1;
-    }
-    return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
-}
+    // ستايل داكن خفيف
+    ImGui::StyleColorsDark();
 
-LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    if (nCode >= 0) {
-        MSLLHOOKSTRUCT* p = (MSLLHOOKSTRUCT*)lParam;
-        if (p->dwExtraInfo == MAGIC_SIGNATURE) return CallNextHookEx(g_hMouseHook, nCode, wParam, lParam);
-        int vk = 0; bool isUp = false;
-        if (wParam == WM_LBUTTONDOWN) vk = VK_LBUTTON;
-        else if (wParam == WM_LBUTTONUP) { vk = VK_LBUTTON; isUp = true; }
-        else if (wParam == WM_RBUTTONDOWN) vk = VK_RBUTTON;
-        else if (wParam == WM_RBUTTONUP) { vk = VK_RBUTTON; isUp = true; }
-        else if (wParam == WM_MBUTTONDOWN) vk = VK_MBUTTON;
-        else if (wParam == WM_MBUTTONUP) { vk = VK_MBUTTON; isUp = true; }
-        else if (wParam == WM_XBUTTONDOWN) vk = (HIWORD(p->mouseData) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
-        else if (wParam == WM_XBUTTONUP) { vk = (HIWORD(p->mouseData) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2; isUp = true; }
-        if (vk != 0 && HandleHookLogic(vk, isUp)) return 1;
-    }
-    return CallNextHookEx(g_hMouseHook, nCode, wParam, lParam);
-}
+    // ربط ImGui بالنظام
+    ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-void InstallHooks() {
-    if (!g_hKeyboardHook) g_hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, GetModuleHandle(NULL), 0);
-    if (!g_hMouseHook) g_hMouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseProc, GetModuleHandle(NULL), 0);
-    
-    // Start Logic Thread
-    if (!g_logic_running) {
-        g_logic_running = true;
-        g_logic_thread = std::thread(LogicThreadFunc);
-    }
-}
+    // 4. تشغيل الهوك (Hooks) - أهم خطوة للعمل
+    InstallHooks();
 
-void UninstallHooks() {
-    // Stop Logic Thread
-    if (g_logic_running) {
-        g_logic_running = false;
-        if (g_logic_thread.joinable()) g_logic_thread.join();
-    }
-
-    if (g_hKeyboardHook) { UnhookWindowsHookEx(g_hKeyboardHook); g_hKeyboardHook = NULL; }
-    if (g_hMouseHook) { UnhookWindowsHookEx(g_hMouseHook); g_hMouseHook = NULL; }
-}
-
-void ApplyTheme() {
-    ImGuiStyle& style = ImGui::GetStyle();
-    if (g_current_theme == 0) { // Dark
-        ImGui::StyleColorsDark();
-        style.Colors[ImGuiCol_WindowBg] = ImVec4(0.1f, 0.1f, 0.12f, 1.0f);
-    } else if (g_current_theme == 1) { // Light
-        ImGui::StyleColorsLight();
-    } else { // Matrix Green
-        ImGui::StyleColorsDark();
-        style.Colors[ImGuiCol_Text] = ImVec4(0.0f, 1.0f, 0.0f, 1.0f);
-        style.Colors[ImGuiCol_WindowBg] = ImVec4(0.0f, 0.05f, 0.0f, 1.0f);
-        style.Colors[ImGuiCol_Button] = ImVec4(0.0f, 0.3f, 0.0f, 1.0f);
-    }
-}
-
-void RenderUI() {
-    ApplyTheme();
-
-    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Pro Input Remapper (Ultra Smooth)", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
-
-    ImGui::Columns(2, "MainLayout", true);
-    ImGui::SetColumnWidth(0, 200);
-
-    ImGui::TextColored(ImVec4(0.0f, 0.8f, 0.5f, 1.0f), " ULTIMATE PRO");
-    ImGui::Separator();
-
-    static int tab = 0;
-    ImGui::Dummy(ImVec2(0,10));
-    if (ImGui::Button("Dashboard", ImVec2(180, 40))) tab = 0;
-    if (ImGui::Button("Mappings", ImVec2(180, 40))) tab = 1;
-    if (ImGui::Button("Features", ImVec2(180, 40))) tab = 2;
-    if (ImGui::Button("CPS Test", ImVec2(180, 40))) tab = 3;
-    if (ImGui::Button("Settings", ImVec2(180, 40))) tab = 4;
-
-    ImGui::NextColumn();
-
-    if (tab == 0) {
-        ImGui::Text("Status:");
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0,1,0,1), "Threaded & Optimized");
-        ImGui::Spacing();
-        ImGui::Text("Last Key: %s", g_last_key_name.c_str());
-        
-        ImGui::Separator();
-        ImGui::Text("Active Modules:");
-        if (g_jitter_enabled) ImGui::BulletText("Jitter (Humanizer)");
-        if (g_sound_enabled) ImGui::BulletText("Audio Feedback");
-    }
-    else if (tab == 1) {
-        if (g_app_state == AppState::Dashboard) {
-            if (ImGui::Button("+ Create Map", ImVec2(150, 30))) {
-                g_app_state = AppState::Wizard_WaitForOriginal;
-                g_wiz_swap_keys = false;
-            }
-        }
-        else if (g_app_state == AppState::Wizard_WaitForOriginal) ImGui::Button("PRESS SOURCE KEY...", ImVec2(300, 50));
-        else if (g_app_state == AppState::Wizard_WaitForTarget) ImGui::Button("PRESS TARGET KEY...", ImVec2(300, 50));
-        else if (g_app_state == AppState::Wizard_Configure) {
-            ImGui::Text("%s -> %s", GetKeyNameSmart(g_wiz_source_key).c_str(), GetKeyNameSmart(g_wiz_target_key).c_str());
-            ImGui::Checkbox("Swap Keys?", &g_wiz_swap_keys);
-            if (!g_wiz_swap_keys) {
-                ImGui::RadioButton("Single", (int*)&g_wiz_is_rapid, 0); ImGui::SameLine();
-                ImGui::RadioButton("Rapid", (int*)&g_wiz_is_rapid, 1);
-                if (g_wiz_is_rapid) ImGui::SliderInt("Speed (ms)", &g_wiz_delay, 15, 1000); // Min 15ms safe
-            }
-            if (ImGui::Button("Save Map")) {
-                std::lock_guard<std::mutex> lock(g_map_mutex);
-                KeyAction act1; act1.targetVk = g_wiz_target_key;
-                act1.type = g_wiz_is_rapid ? ActionType::RapidFire : ActionType::SinglePress;
-                act1.delayMs = g_wiz_delay;
-                g_complex_mappings[g_wiz_source_key].push_back(act1);
-                if (g_wiz_swap_keys) {
-                    KeyAction act2; act2.targetVk = g_wiz_source_key;
-                    act2.type = ActionType::SinglePress; act2.delayMs = 0;
-                    g_complex_mappings[g_wiz_target_key].push_back(act2);
-                }
-                g_app_state = AppState::Dashboard;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel")) g_app_state = AppState::Dashboard;
-        }
-        
-        ImGui::Separator();
-        ImGui::BeginChild("List", ImVec2(0, 300), true);
-        
-        // Safe list iteration
+    // 5. الحلقة الرئيسية (The Main Loop)
+    bool done = false;
+    while (!done)
+    {
+        // معالجة رسائل الويندوز (دون انتظار)
+        MSG msg;
+        while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
         {
-            std::lock_guard<std::mutex> lock(g_map_mutex);
-            for (auto it = g_complex_mappings.begin(); it != g_complex_mappings.end(); ) {
-                if (it->second.empty()) { it = g_complex_mappings.erase(it); continue; }
-                if (ImGui::TreeNode(GetKeyNameSmart(it->first).c_str())) {
-                    ImGui::SameLine(200);
-                    if (ImGui::Button(("Del##" + std::to_string(it->first)).c_str())) { it = g_complex_mappings.erase(it); ImGui::TreePop(); continue; }
-                    ImGui::TreePop();
-                }
-                ++it;
-            }
+            ::TranslateMessage(&msg);
+            ::DispatchMessage(&msg);
+            if (msg.message == WM_QUIT)
+                done = true;
         }
-        ImGui::EndChild();
-    }
-    else if (tab == 2) {
-        ImGui::Checkbox("Enable Jitter", &g_jitter_enabled);
-        if (g_jitter_enabled) ImGui::SliderInt("Intensity", &g_jitter_intensity, 1, 10);
-        ImGui::Checkbox("Enable Sound", &g_sound_enabled);
-        ImGui::SliderInt("Max CPS", &g_max_cps_limit, 0, 50);
-    }
-    else if (tab == 3) {
-        if (ImGui::Button("CLICK HERE", ImVec2(400, 200))) {}
-        if (ImGui::IsItemHovered()) g_cps_active = true; else g_cps_active = false;
-        ImGui::Text("Speed: %.1f CPS", g_cps_result);
-    }
-    else if (tab == 4) {
-        const char* themes[] = { "Dark", "Light", "Matrix" };
-        ImGui::Combo("Theme", &g_current_theme, themes, 3);
+        if (done)
+            break;
+
+        // ---[ CORE LOGIC ]---
+        // تشغيل منطق الأزرار والـ Rapid Fire
+        // يتم استدعاؤه دائماً حتى لو النافذة مصغرة لضمان عمل البرنامج في الخلفية
+        ProcessInputLogic();
+
+        // ---[ OPTIMIZATION ]---
+        // إذا كانت النافذة مصغرة (Minimized)، لا تقم بالرسم لتوفير الـ GPU/CPU
+        if (::IsIconic(hwnd))
+        {
+            // استراحة قصيرة جداً (1ms) للسماح للـ Rapid Fire بالعمل بدقة
+            // دون استهلاك المعالج بنسبة 100%
+            ::Sleep(1); 
+            continue; 
+        }
+
+        // ---[ RENDERING ]---
+        // الرسم فقط عندما تكون النافذة ظاهرة
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
+
+        // رسم واجهتنا الخاصة
+        RenderUI();
+
+        // إنهاء الإطار وعرضه
+        ImGui::Render();
+        const float clear_color_with_alpha[4] = { 0.1f, 0.1f, 0.12f, 1.0f }; // لون خلفية هادئ
+        g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
+        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        
+        // Present(1, 0) = VSync On (يمنع ارتفاع الـ FPS واستهلاك الكارت بلا داعي)
+        g_pSwapChain->Present(1, 0);
+
+        // استراحة 1ms لمنع استهلاك المعالج بالكامل في الحلقة
+        ::Sleep(1);
     }
 
-    ImGui::End();
+    // 6. التنظيف عند الإغلاق
+    UninstallHooks(); // إزالة الهوك بأمان
+    
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+
+    CleanupDeviceD3D();
+    ::DestroyWindow(hwnd);
+    ::UnregisterClass(wc.lpszClassName, wc.hInstance);
+
+    return 0;
+}
+
+// --- دوال DirectX المساعدة (Boilerplate) ---
+
+bool CreateDeviceD3D(HWND hWnd)
+{
+    DXGI_SWAP_CHAIN_DESC sd;
+    ZeroMemory(&sd, sizeof(sd));
+    sd.BufferCount = 2;
+    sd.BufferDesc.Width = 0;
+    sd.BufferDesc.Height = 0;
+    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferDesc.RefreshRate.Numerator = 60;
+    sd.BufferDesc.RefreshRate.Denominator = 1;
+    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow = hWnd;
+    sd.SampleDesc.Count = 1;
+    sd.SampleDesc.Quality = 0;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+
+    UINT createDeviceFlags = 0;
+    D3D_FEATURE_LEVEL featureLevel;
+    const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0, };
+    if (D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext) != S_OK)
+        return false;
+
+    CreateRenderTarget();
+    return true;
+}
+
+void CleanupDeviceD3D()
+{
+    CleanupRenderTarget();
+    if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = NULL; }
+    if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = NULL; }
+    if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = NULL; }
+}
+
+void CreateRenderTarget()
+{
+    ID3D11Texture2D* pBackBuffer;
+    g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    g_pd3dDevice->CreateRenderTargetView(pBackBuffer, NULL, &g_mainRenderTargetView);
+    pBackBuffer->Release();
+}
+
+void CleanupRenderTarget()
+{
+    if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = NULL; }
 }
