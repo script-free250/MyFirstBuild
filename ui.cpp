@@ -3,16 +3,21 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 
 // --- Global Variables ---
 std::map<int, std::vector<KeyAction>> g_complex_mappings;
 std::map<int, bool> g_physical_key_status;
 std::map<int, float> g_key_states;
+std::vector<std::pair<int, bool>> g_pending_inputs; // {vkCode, isUp}
 
 int g_last_vk_code = 0;
 std::string g_last_key_name = "None";
 AppState g_app_state = AppState::Dashboard;
 bool g_safety_mode_active = false;
+
+// لمنع التكرار (Anti-Loop Protection)
+std::set<int> g_ignore_next_press; 
 
 // Wizard Variables
 int g_wiz_source_key = -1;
@@ -38,9 +43,12 @@ std::string GetKeyNameSmart(int vkCode) {
     return "VK_" + std::to_string(vkCode);
 }
 
-// --- Input Injection ---
-void SendInputEvent(int vkCode, bool isUp) {
+// --- دالة الإرسال الفعلية (تستدعى خارج الهوك) ---
+void ExecuteSendInput(int vkCode, bool isUp) {
     if (g_safety_mode_active) return;
+
+    // تسجيل أن هذا الزر نحن من ضغطه (لتجاهله في الهوك)
+    if (!isUp) g_ignore_next_press.insert(vkCode);
 
     INPUT input = {};
     if (vkCode >= VK_LBUTTON && vkCode <= VK_XBUTTON2) { 
@@ -56,124 +64,101 @@ void SendInputEvent(int vkCode, bool isUp) {
         input.ki.dwFlags = isUp ? KEYEVENTF_KEYUP : 0;
     }
     
-    // هذا الإرسال سيحمل علامة INJECTED تلقائياً من الويندوز
     SendInput(1, &input, sizeof(INPUT));
 }
 
-// --- Rapid Fire Processor (1ms Enabled) ---
-void ProcessRapidFire() {
+// --- المعالج الرئيسي (يعمل في Main Loop) ---
+void ProcessInputLogic() {
     if (g_safety_mode_active) return;
 
-    // إزالة أي قيود على التكرار للسماح بـ 1ms
-    // لكن نستخدم Loop خفيف جداً
     DWORD currentTime = GetTickCount();
 
+    // 1. معالجة Single Press المؤجلة (لضمان سرعة الاستجابة)
+    // (يتم التعامل معها مباشرة في الهوك للسرعة القصوى، ولكن هنا ننظف الحالات)
+    
+    // 2. معالجة Rapid Fire
     for (auto& [sourceKey, actions] : g_complex_mappings) {
         if (g_physical_key_status[sourceKey]) {
             for (auto& action : actions) {
                 if (action.type == ActionType::RapidFire) {
-                    
-                    // هنا سمحنا بـ 1ms
+                    // هنا نسمح بـ 1ms لأننا خارج الهوك ولن نعلق النظام
                     if (currentTime - action.lastExecutionTime >= (DWORD)action.delayMs) {
-                        SendInputEvent(action.targetVk, false); // Down
-                        SendInputEvent(action.targetVk, true);  // Up
-                        
+                        ExecuteSendInput(action.targetVk, false); // Down
+                        ExecuteSendInput(action.targetVk, true);  // Up
                         action.lastExecutionTime = currentTime;
                         
-                        // تحديث الحالة المرئية (مهم ألا يكون ثقيلاً)
-                        if (g_key_states.count(action.targetVk)) 
-                             g_key_states[action.targetVk] = 1.0f; 
+                        // تحديث خفيف جداً للحالة
+                        if (g_key_states.count(action.targetVk)) g_key_states[action.targetVk] = 1.0f;
                     }
                 }
             }
         }
     }
-}
 
-void UpdateAnimationState() {
+    // 3. تحديث الأنيميشن
     for (auto& pair : g_key_states) {
-        if (pair.second > 0.0f) {
-            pair.second -= 0.1f; // زيادة سرعة الإخفاء لتناسب السرعة العالية
-            if (pair.second < 0.0f) pair.second = 0.0f;
-        }
+        if (pair.second > 0.0f) pair.second -= 0.02f; // أبطأ قليلاً لتقليل الحمل
     }
 }
 
-// --- Logic Implementation ---
-// return true = BLOCK ORIGINAL INPUT
-bool ProcessHookLogic(int vkCode, bool isUp) {
+// --- Hook Logic ---
+// هذه الدالة يجب أن تكون سريعة جداً جداً
+bool HandleHook(int vkCode, bool isUp, bool isInjected) {
+    // 1. الحماية من الحلقات
+    if (isInjected) return false;
     
-    // 1. Safety & Wizard Checks
+    // حماية إضافية: هل هذا الزر نحن من أرسله ولم يحمل علامة Injected؟
+    if (!isUp) {
+        auto it = g_ignore_next_press.find(vkCode);
+        if (it != g_ignore_next_press.end()) {
+            g_ignore_next_press.erase(it); // وجدناه، تجاهله واحذفه من القائمة
+            return false;
+        }
+    }
+
     if (g_safety_mode_active) return false;
 
-    if (!isUp) {
+    // 2. Wizard Setup
+    if (!isUp && g_app_state != AppState::Dashboard) {
         if (g_app_state == AppState::Wizard_WaitForOriginal) {
-            g_wiz_source_key = vkCode;
-            g_app_state = AppState::Wizard_WaitForTarget;
-            return true; // Block during setup
-        }
-        else if (g_app_state == AppState::Wizard_WaitForTarget) {
-            g_wiz_target_key = vkCode;
-            g_app_state = AppState::Wizard_AskSwap; 
-            return true; 
+            g_wiz_source_key = vkCode; g_app_state = AppState::Wizard_WaitForTarget; return true;
+        } else if (g_app_state == AppState::Wizard_WaitForTarget) {
+            g_wiz_target_key = vkCode; g_app_state = AppState::Wizard_AskSwap; return true;
         }
     }
 
-    // 2. Active Mapping Check
-    // استخدام count سريع جداً
+    // 3. Execution (Remapping)
     if (g_complex_mappings.count(vkCode)) {
-        g_physical_key_status[vkCode] = !isUp;
-        auto& actions = g_complex_mappings[vkCode];
+        g_physical_key_status[vkCode] = !isUp; // تحديث الحالة للـ Rapid Fire
         
-        // تنفيذ الأوامر
-        if (!isUp) { // عند الضغط
-            for (auto& action : actions) {
-                if (action.type == ActionType::SinglePress) {
-                    SendInputEvent(action.targetVk, false); 
-                    g_key_states[action.targetVk] = 1.0f;
-                }
-                // RapidFire لا يفعل شيئاً هنا، فقط يمنع الزر الأصلي
-            }
-        } 
-        else { // عند الرفع
-            for (auto& action : actions) {
-                if (action.type == ActionType::SinglePress) {
-                    SendInputEvent(action.targetVk, true); 
-                }
+        // بالنسبة للـ Single Press، يجب الإرسال فوراً لمنع التأخير
+        // لكن نستخدم دالة الإرسال المحمية
+        auto& actions = g_complex_mappings[vkCode];
+        for (auto& action : actions) {
+            if (action.type == ActionType::SinglePress) {
+                ExecuteSendInput(action.targetVk, isUp); // Send Immediately
+                if (!isUp) g_key_states[action.targetVk] = 1.0f;
             }
         }
-        
-        return true; // دائماً نمنع الزر الأصلي إذا كان له تخطيط
+        return true; // Block original key
     }
 
-    // 3. Visualizer (فقط إذا لم يكن محجوباً)
+    // 4. Visualizer
     if (!isUp) {
         g_key_states[vkCode] = 1.0f;
         g_last_vk_code = vkCode;
         g_last_key_name = GetKeyNameSmart(vkCode);
     }
     
-    return false; // اسمح بمرور الزر الأصلي
+    return false;
 }
-
-// --- SYSTEM HOOKS (THE CRITICAL FIX) ---
 
 LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0) {
         KBDLLHOOKSTRUCT* p = (KBDLLHOOKSTRUCT*)lParam;
-        
-        // >>>>> الحل النهائي للتعليق <<<<<
-        // إذا كان هذا الزر قادماً من SendInput (سواء من برنامجنا أو غيره)
-        // مرره فوراً للنظام ولا تعالجه ولا تنظر إليه
-        if (p->flags & LLKHF_INJECTED) {
-            return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
-        }
-
         bool isUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
-        
-        if (ProcessHookLogic(p->vkCode, isUp)) {
-            return 1; // Block original
-        }
+        // التحقق المزدوج
+        if (HandleHook(p->vkCode, isUp, (p->flags & LLKHF_INJECTED) != 0)) return 1;
     }
     return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
 }
@@ -181,11 +166,8 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
 LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0) {
         MSLLHOOKSTRUCT* p = (MSLLHOOKSTRUCT*)lParam;
-
-        // >>>>> الحل النهائي للتعليق (للماوس) <<<<<
-        if (p->flags & LLMHF_INJECTED) {
-            return CallNextHookEx(g_hMouseHook, nCode, wParam, lParam);
-        }
+        // التحقق المزدوج للماوس
+        if (p->flags & LLMHF_INJECTED) return CallNextHookEx(g_hMouseHook, nCode, wParam, lParam);
 
         int vk = 0; bool isUp = false;
         if (wParam == WM_LBUTTONDOWN) vk = VK_LBUTTON;
@@ -197,11 +179,7 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
         else if (wParam == WM_XBUTTONDOWN) vk = (HIWORD(p->mouseData) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
         else if (wParam == WM_XBUTTONUP) { vk = (HIWORD(p->mouseData) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2; isUp = true; }
 
-        if (vk != 0) {
-            if (ProcessHookLogic(vk, isUp)) {
-                return 1; // Block original
-            }
-        }
+        if (vk != 0 && HandleHook(vk, isUp, false)) return 1;
     }
     return CallNextHookEx(g_hMouseHook, nCode, wParam, lParam);
 }
@@ -215,160 +193,90 @@ void UninstallHooks() {
     if (g_hMouseHook) { UnhookWindowsHookEx(g_hMouseHook); g_hMouseHook = NULL; }
 }
 
-// --- UI Rendering ---
 void RenderUI() {
+    // --- Optimized UI Rendering ---
+    // إذا لم يكن هناك تركيز أو تصغير، لا نرسم (توفير CPU)
+    // لكننا لا نملك وصولاً مباشراً لـ HWND هنا، سنعتمد على ImGui
+    
     ImGuiStyle& style = ImGui::GetStyle();
     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.1f, 0.1f, 0.12f, 1.0f);
     
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(1000, 700), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
     ImGui::Begin("Pro Input Remapper", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
 
     ImGui::Columns(2, "MainLayout", true);
-    ImGui::SetColumnWidth(0, 300);
+    ImGui::SetColumnWidth(0, 250);
 
     // Sidebar
-    ImGui::TextColored(ImVec4(0.0f, 0.8f, 0.5f, 1.0f), "  ULTIMATE REMAPPER");
+    ImGui::TextColored(ImVec4(0.0f, 0.8f, 0.5f, 1.0f), "  ULTIMATE LITE");
     ImGui::Separator();
     
     if (g_safety_mode_active) {
         ImGui::Dummy(ImVec2(0, 10));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1, 0, 0, 1));
-        if (ImGui::Button("SAFETY MODE ON (F10)", ImVec2(280, 60))) g_safety_mode_active = false;
+        if (ImGui::Button("SAFETY ON (F10)", ImVec2(230, 50))) g_safety_mode_active = false;
         ImGui::PopStyleColor();
     } else {
          ImGui::Dummy(ImVec2(0, 10));
-         if (ImGui::Button("PANIC STOP (F10)", ImVec2(280, 30))) g_safety_mode_active = true;
+         if (ImGui::Button("PANIC STOP (F10)", ImVec2(230, 30))) g_safety_mode_active = true;
     }
 
     static int tab = 0;
     ImGui::Dummy(ImVec2(0,10));
-    if (ImGui::Button("  Dashboard  ", ImVec2(280, 50))) tab = 0;
-    ImGui::Dummy(ImVec2(0, 10));
-    if (ImGui::Button("  Configure Maps  ", ImVec2(280, 50))) tab = 1;
+    if (ImGui::Button("Dashboard", ImVec2(230, 40))) tab = 0;
+    if (ImGui::Button("Mappings", ImVec2(230, 40))) tab = 1;
 
     ImGui::NextColumn();
 
     if (g_safety_mode_active) {
         ImGui::TextColored(ImVec4(1,0,0,1), "!!! SAFETY MODE ACTIVE !!!");
-        ImGui::Text("All hooks are paused.");
     }
     else if (tab == 0) {
-        ImGui::Text("Active Inputs");
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(1,1,0,1), "Last Key: %s", g_last_key_name.c_str());
+        ImGui::Text("Last Key: %s", g_last_key_name.c_str());
+        ImGui::TextDisabled("Program is running in background optimized mode.");
     }
     else if (tab == 1) {
-        ImGui::TextColored(ImVec4(0, 0.8f, 1, 1), "Mapping Configuration");
-        ImGui::Separator();
-        
+        // ... (Wizard Code Same as Before - Simplified) ...
         if (g_app_state == AppState::Dashboard) {
-            if (ImGui::Button("+ Create New Map", ImVec2(200, 40))) {
-                g_app_state = AppState::Wizard_WaitForOriginal;
-                g_wiz_swap_keys = false; 
-            }
+            if (ImGui::Button("+ New Map", ImVec2(150, 30))) { g_app_state = AppState::Wizard_WaitForOriginal; g_wiz_swap_keys = false; }
         }
-        else if (g_app_state == AppState::Wizard_WaitForOriginal) {
-            ImGui::Button("STEP 1: PRESS SOURCE KEY", ImVec2(400, 60));
-        }
-        else if (g_app_state == AppState::Wizard_WaitForTarget) {
-            ImGui::Button("STEP 2: PRESS TARGET ACTION", ImVec2(400, 60));
-        }
+        else if (g_app_state == AppState::Wizard_WaitForOriginal) ImGui::Button("PRESS SOURCE KEY", ImVec2(300, 50));
+        else if (g_app_state == AppState::Wizard_WaitForTarget) ImGui::Button("PRESS TARGET KEY", ImVec2(300, 50));
         else if (g_app_state == AppState::Wizard_AskSwap) {
-            ImGui::BeginGroup();
-            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "STEP 3: MAPPING TYPE");
-            ImGui::Text("Source: %s", GetKeyNameSmart(g_wiz_source_key).c_str());
-            ImGui::Text("Target: %s", GetKeyNameSmart(g_wiz_target_key).c_str());
-            ImGui::Dummy(ImVec2(0, 10));
-            ImGui::Text("Swap keys?");
-            if (ImGui::Button("NO (Remap Only)", ImVec2(180, 40))) {
-                g_wiz_swap_keys = false;
-                g_app_state = AppState::Wizard_Configure;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("YES (Swap Keys)", ImVec2(180, 40))) {
-                g_wiz_swap_keys = true;
-                g_app_state = AppState::Wizard_Configure;
-            }
-            ImGui::EndGroup();
+             ImGui::Text("Swap?");
+             if (ImGui::Button("No", ImVec2(100,30))) { g_wiz_swap_keys = false; g_app_state = AppState::Wizard_Configure; }
+             ImGui::SameLine();
+             if (ImGui::Button("Yes", ImVec2(100,30))) { g_wiz_swap_keys = true; g_app_state = AppState::Wizard_Configure; }
         }
         else if (g_app_state == AppState::Wizard_Configure) {
-            ImGui::Text("Setup: %s -> %s", GetKeyNameSmart(g_wiz_source_key).c_str(), GetKeyNameSmart(g_wiz_target_key).c_str());
-            
+            ImGui::Text("%s -> %s", GetKeyNameSmart(g_wiz_source_key).c_str(), GetKeyNameSmart(g_wiz_target_key).c_str());
             if (!g_wiz_swap_keys) {
-                ImGui::Separator();
-                ImGui::Text("Trigger Mode:");
-                if (ImGui::RadioButton("Single Press", !g_wiz_is_rapid)) g_wiz_is_rapid = false;
-                ImGui::SameLine();
-                if (ImGui::RadioButton("Rapid Fire", g_wiz_is_rapid)) g_wiz_is_rapid = true;
-            } else {
-                g_wiz_is_rapid = false; 
+                ImGui::RadioButton("Single", (int*)&g_wiz_is_rapid, 0); ImGui::SameLine();
+                ImGui::RadioButton("Rapid", (int*)&g_wiz_is_rapid, 1);
+                if (g_wiz_is_rapid) ImGui::SliderInt("ms", &g_wiz_delay, 1, 500);
             }
-
-            if (g_wiz_is_rapid) {
-                // السماح من 1ms
-                ImGui::SliderInt("Speed (ms)", &g_wiz_delay, 1, 500); 
-                if (g_wiz_delay < 10) ImGui::TextColored(ImVec4(1,0,0,1), "Warning: Extreme Speed!");
-            }
-
-            ImGui::Dummy(ImVec2(0, 20));
-            if (ImGui::Button("SAVE", ImVec2(150, 40))) {
-                KeyAction act1;
-                act1.targetVk = g_wiz_target_key;
-                act1.type = g_wiz_is_rapid ? ActionType::RapidFire : ActionType::SinglePress;
-                act1.delayMs = g_wiz_delay;
+            if (ImGui::Button("Save")) {
+                KeyAction act1 = { g_wiz_target_key, g_wiz_is_rapid ? ActionType::RapidFire : ActionType::SinglePress, g_wiz_delay };
                 g_complex_mappings[g_wiz_source_key].push_back(act1);
-
-                if (g_wiz_swap_keys) {
-                    KeyAction act2;
-                    act2.targetVk = g_wiz_source_key;
-                    act2.type = ActionType::SinglePress;
-                    act2.delayMs = 0;
-                    g_complex_mappings[g_wiz_target_key].push_back(act2);
-                }
+                if (g_wiz_swap_keys) { KeyAction act2 = { g_wiz_source_key, ActionType::SinglePress, 0 }; g_complex_mappings[g_wiz_target_key].push_back(act2); }
                 g_app_state = AppState::Dashboard;
             }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(100, 40))) g_app_state = AppState::Dashboard;
+            ImGui::SameLine(); if (ImGui::Button("Cancel")) g_app_state = AppState::Dashboard;
         }
 
         ImGui::Separator();
-        ImGui::Text("Active Mappings:");
-        ImGui::BeginChild("MappingsList", ImVec2(0, 300), true);
-        
+        ImGui::BeginChild("List", ImVec2(0, 300), true);
         for (auto it = g_complex_mappings.begin(); it != g_complex_mappings.end(); ) {
-            int srcKey = it->first;
-            auto& actions = it->second;
-
-            if (actions.empty()) {
-                it = g_complex_mappings.erase(it);
-                continue;
-            }
-
-            bool nodeOpen = ImGui::TreeNode(GetKeyNameSmart(srcKey).c_str());
-            ImGui::SameLine(300);
-            
-            ImGui::PushID(srcKey * 999);
-            if (ImGui::Button("Delete Key")) {
-                it = g_complex_mappings.erase(it);
-                if (nodeOpen) ImGui::TreePop(); 
-                ImGui::PopID();
-                continue; 
-            }
-            ImGui::PopID();
-
-            if (nodeOpen) {
-                int actionIdx = 0;
-                for (auto actIt = actions.begin(); actIt != actions.end(); ) {
-                    ImGui::PushID(srcKey + actionIdx * 1000); 
-                    std::string label = "-> " + GetKeyNameSmart(actIt->targetVk);
-                    if (actIt->type == ActionType::RapidFire) label += " [RAPID " + std::to_string(actIt->delayMs) + "ms]";
-                    ImGui::Text(label.c_str());
-                    ImGui::SameLine(250);
-                    if (ImGui::Button("[X]")) actIt = actions.erase(actIt);
-                    else ++actIt;
-                    ImGui::PopID();
-                    actionIdx++;
+            if (it->second.empty()) { it = g_complex_mappings.erase(it); continue; }
+            if (ImGui::TreeNode(GetKeyNameSmart(it->first).c_str())) {
+                ImGui::SameLine(200);
+                if (ImGui::Button(("Del##" + std::to_string(it->first)).c_str())) { it = g_complex_mappings.erase(it); ImGui::TreePop(); continue; }
+                int idx=0;
+                for (auto aIt = it->second.begin(); aIt != it->second.end(); ) {
+                    ImGui::Text("-> %s (%s)", GetKeyNameSmart(aIt->targetVk).c_str(), aIt->type == ActionType::RapidFire ? "RAPID" : "ONE");
+                    ImGui::SameLine(300);
+                    if (ImGui::Button(("X##" + std::to_string(it->first) + std::to_string(idx++)).c_str())) aIt = it->second.erase(aIt); else ++aIt;
                 }
                 ImGui::TreePop();
             }
