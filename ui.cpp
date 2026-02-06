@@ -1,155 +1,184 @@
-#include <windows.h>
+#include "ui.h"
 #include "imgui/imgui.h"
-#include "keyboard_hook.h"
 #include <string>
 #include <vector>
 #include <map>
+#include <iostream>
 
-// بنية لتمثيل المفتاح
-struct Key {
-    std::string name;
-    ImVec2 pos;
-    ImVec2 size;
+// --- Global Variables Definition ---
+std::map<int, int> g_key_mappings;
+std::map<int, float> g_key_states;
+int g_key_press_count = 0;
+int g_last_vk_code = 0;
+std::string g_last_key_name = "None";
+RemapState g_remap_state = RemapState::None;
+
+// Internal Hook Handle
+HHOOK g_hKeyboardHook = NULL;
+
+// --- Key Structure for Visualization ---
+struct KeyDef {
+    std::string label;
+    int vkCode;
+    ImVec2 pos; // Relative position (0-15 grid)
+    float width; // Width in grid units
 };
 
-// خريطة لربط كود المفتاح ببياناته
-std::map<int, Key> keyboardLayout;
+// --- QWERTY Layout Definition ---
+// Simplified layout for demonstration
+std::vector<KeyDef> g_keyboardLayout = {
+    // Row 1
+    {"ESC", VK_ESCAPE, {0,0}, 1}, {"F1", VK_F1, {2,0}, 1}, {"F2", VK_F2, {3,0}, 1}, {"F3", VK_F3, {4,0}, 1}, {"F4", VK_F4, {5,0}, 1},
+    // Row 2
+    {"~", 192, {0,1.5}, 1}, {"1", '1', {1,1.5}, 1}, {"2", '2', {2,1.5}, 1}, {"3", '3', {3,1.5}, 1}, {"4", '4', {4,1.5}, 1}, {"5", '5', {5,1.5}, 1},
+    {"6", '6', {6,1.5}, 1}, {"7", '7', {7,1.5}, 1}, {"8", '8', {8,1.5}, 1}, {"9", '9', {9,1.5}, 1}, {"0", '0', {10,1.5}, 1}, {"BkSp", VK_BACK, {13,1.5}, 2},
+    // Row 3
+    {"Tab", VK_TAB, {0,2.5}, 1.5}, {"Q", 'Q', {1.5,2.5}, 1}, {"W", 'W', {2.5,2.5}, 1}, {"E", 'E', {3.5,2.5}, 1}, {"R", 'R', {4.5,2.5}, 1}, {"T", 'T', {5.5,2.5}, 1},
+    {"Y", 'Y', {6.5,2.5}, 1}, {"U", 'U', {7.5,2.5}, 1}, {"I", 'I', {8.5,2.5}, 1}, {"O", 'O', {9.5,2.5}, 1}, {"P", 'P', {10.5,2.5}, 1},
+    // Row 4
+    {"Caps", VK_CAPITAL, {0,3.5}, 1.75}, {"A", 'A', {1.75,3.5}, 1}, {"S", 'S', {2.75,3.5}, 1}, {"D", 'D', {3.75,3.5}, 1}, {"F", 'F', {4.75,3.5}, 1}, {"G", 'G', {5.75,3.5}, 1},
+    {"H", 'H', {6.75,3.5}, 1}, {"J", 'J', {7.75,3.5}, 1}, {"K", 'K', {8.75,3.5}, 1}, {"L", 'L', {9.75,3.5}, 1}, {"Enter", VK_RETURN, {12.75,3.5}, 2.25},
+    // Row 5
+    {"Shift", VK_LSHIFT, {0,4.5}, 2.25}, {"Z", 'Z', {2.25,4.5}, 1}, {"X", 'X', {3.25,4.5}, 1}, {"C", 'C', {4.25,4.5}, 1}, {"V", 'V', {5.25,4.5}, 1}, {"B", 'B', {6.25,4.5}, 1},
+    {"N", 'N', {7.25,4.5}, 1}, {"M", 'M', {8.25,4.5}, 1}, {"Shift", VK_RSHIFT, {12.25,4.5}, 2.75},
+    // Row 6
+    {"Ctrl", VK_LCONTROL, {0,5.5}, 1.5}, {"Win", VK_LWIN, {1.5,5.5}, 1}, {"Alt", VK_LMENU, {2.5,5.5}, 1.25}, {"Space", VK_SPACE, {3.75,5.5}, 6.25}, {"Alt", VK_RMENU, {10,5.5}, 1}, {"Ctrl", VK_RCONTROL, {13.5,5.5}, 1.5}
+};
 
-// متغيرات للتخصيص
-static int from_key = 0;
-static std::string from_key_name = "None";
-static int to_key = 0;
-static std::string to_key_name = "None";
-
-// دالة لإنشاء تخطيط الكيبورد الكامل
-void InitializeLayout() {
-    float x = 10, y = 50, w = 40, h = 40, s = 4;
-    // ... (هنا سنضع الكود الكامل لتخطيط الكيبورد)
-    // الصف العلوي
-    keyboardLayout[VK_ESCAPE] = {"Esc", {x, y}, {w, h}};
-    for (int i = 0; i < 12; i++) keyboardLayout[VK_F1 + i] = {"F" + std::to_string(i + 1), {x + (w*1.5f) + i*(w+s), y}, {w, h}};
-    // صف الأرقام
-    y += h + s;
-    const char* num_keys = "`1234567890-=";
-    const int num_vk[] = {VK_OEM_3, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', VK_OEM_MINUS, VK_OEM_PLUS};
-    for (int i = 0; i < 13; i++) keyboardLayout[num_vk[i]] = {{1, num_keys[i]}, {x + i*(w+s), y}, {w, h}};
-    keyboardLayout[VK_BACK] = {"Backspace", {x + 13*(w+s), y}, {w*2, h}};
-    // صف QWERTY
-    y += h + s;
-    keyboardLayout[VK_TAB] = {"Tab", {x, y}, {w*1.5f, h}};
-    const char* qwerty_keys = "QWERTYUIOP[]\\";
-    const int qwerty_vk[] = {'Q','W','E','R','T','Y','U','I','O','P', VK_OEM_4, VK_OEM_6, VK_OEM_5};
-    for (int i = 0; i < 13; i++) keyboardLayout[qwerty_vk[i]] = {{1, qwerty_keys[i]}, {x + (w*1.5f) + s + i*(w+s), y}, {w, h}};
-    // صف ASDF
-    y += h + s;
-    keyboardLayout[VK_CAPITAL] = {"Caps Lock", {x, y}, {w*1.8f, h}};
-    const char* asdf_keys = "ASDFGHJKL;'";
-    const int asdf_vk[] = {'A','S','D','F','G','H','J','K','L', VK_OEM_1, VK_OEM_7};
-    for (int i = 0; i < 11; i++) keyboardLayout[asdf_vk[i]] = {{1, asdf_keys[i]}, {x + (w*1.8f) + s + i*(w+s), y}, {w, h}};
-    keyboardLayout[VK_RETURN] = {"Enter", {x + (w*1.8f) + s + 11*(w+s), y}, {w*2.2f, h}};
-    // صف ZXC
-    y += h + s;
-    keyboardLayout[VK_LSHIFT] = {"L Shift", {x, y}, {w*2.5f, h}};
-    const char* zxc_keys = "ZXCVBNM,./";
-    const int zxc_vk[] = {'Z','X','C','V','B','N','M', VK_OEM_COMMA, VK_OEM_PERIOD, VK_OEM_2};
-    for (int i = 0; i < 10; i++) keyboardLayout[zxc_vk[i]] = {{1, zxc_keys[i]}, {x + (w*2.5f) + s + i*(w+s), y}, {w, h}};
-    keyboardLayout[VK_RSHIFT] = {"R Shift", {x + (w*2.5f) + s + 10*(w+s), y}, {w*2.8f, h}};
-    // الصف الأخير
-    y += h + s;
-    keyboardLayout[VK_LCONTROL] = {"L Ctrl", {x, y}, {w*1.5f, h}};
-    keyboardLayout[VK_LWIN] = {"Win", {x + w*1.5f+s, y}, {w*1.2f, h}};
-    keyboardLayout[VK_LMENU] = {"L Alt", {x + w*2.7f+s*2, y}, {w*1.2f, h}};
-    keyboardLayout[VK_SPACE] = {"Space", {x + w*3.9f+s*3, y}, {w*5, h}};
-    // الأسهم
-    keyboardLayout[VK_UP] = {"Up", {x + (w*2.5f) + s + 11*(w+s) + s, y - (h+s)}, {w, h}};
-    keyboardLayout[VK_LEFT] = {"Left", {x + (w*2.5f) + s + 10*(w+s), y}, {w, h}};
-    keyboardLayout[VK_DOWN] = {"Down", {x + (w*2.5f) + s + 11*(w+s), y}, {w, h}};
-    keyboardLayout[VK_RIGHT] = {"Right", {x + (w*2.5f) + s + 12*(w+s), y}, {w, h}};
+// --- Low Level Keyboard Hook ---
+LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode >= 0) {
+        KBDLLHOOKSTRUCT* pKey = (KBDLLHOOKSTRUCT*)lParam;
+        if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+            g_key_states[pKey->vkCode] = 1.0f; // Set intensity to Max
+            g_last_vk_code = pKey->vkCode;
+            g_key_press_count++;
+            
+            // Simple key name retrieval
+            char keyNameBuffer[128];
+            if (GetKeyNameTextA(pKey->scanCode << 16, keyNameBuffer, 128)) {
+                 g_last_key_name = std::string(keyNameBuffer);
+            } else {
+                 g_last_key_name = std::to_string(pKey->vkCode);
+            }
+        }
+    }
+    return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
 }
 
-// الدالة الرئيسية لرسم الواجهة
+void InstallHook() {
+    g_hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, GetModuleHandle(NULL), 0);
+}
+
+void UninstallHook() {
+    if (g_hKeyboardHook) {
+        UnhookWindowsHookEx(g_hKeyboardHook);
+        g_hKeyboardHook = NULL;
+    }
+}
+
+// --- Animation Update ---
+// Call this every frame before rendering
+void UpdateAnimationState() {
+    float decaySpeed = 0.05f; // Speed of fade out
+    for (auto& pair : g_key_states) {
+        if (pair.second > 0.0f) {
+            pair.second -= decaySpeed;
+            if (pair.second < 0.0f) pair.second = 0.0f;
+        }
+    }
+}
+
+// --- Main Render Function ---
 void RenderUI() {
-    if (keyboardLayout.empty()) InitializeLayout();
+    // 1. Setup Style (Run once or every frame if dynamic)
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding = 8.0f;
+    style.FrameRounding = 5.0f;
+    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.10f, 1.00f);
+    style.Colors[ImGuiCol_TitleBgActive] = ImVec4(0.20f, 0.10f, 0.30f, 1.00f);
+    
+    // Main Window
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(1200, 700), ImGuiCond_FirstUseEver);
+    
+    ImGui::Begin("Ultimate Keyboard Utility", NULL, ImGuiWindowFlags_NoCollapse);
 
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::Begin("Main", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize);
-
-    ImGui::BeginChild("Tester", ImVec2(0, ImGui::GetContentRegionAvail().y * 0.6f), false, ImGuiWindowFlags_NoScrollbar);
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    ImVec2 p = ImGui::GetCursorScreenPos();
-
-    for (auto& pair : keyboardLayout) {
-        Key& key = pair.second;
-        ImVec2 key_pos = ImVec2(p.x + key.pos.x, p.y + key.pos.y);
-        ImVec2 key_end = ImVec2(key_pos.x + key.size.x, key_pos.y + key.size.y);
+    if (ImGui::BeginTabBar("MainTabs")) {
         
-        float alpha = 0.0f;
-        if (g_key_states.count(pair.first)) { alpha = g_key_states[pair.first] / 255.0f; }
+        // --- Tab 1: Visualizer ---
+        if (ImGui::BeginTabItem("Visualizer")) {
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.7f, 0.4f, 1.0f, 1.0f), "LIVE KEYBOARD FEEDBACK");
+            ImGui::Separator();
+            ImGui::Spacing();
 
-        draw_list->AddRectFilled(key_pos, key_end, IM_COL32(45, 45, 48, 255), 4.0f);
-        if (alpha > 0) { draw_list->AddRectFilled(key_pos, key_end, IM_COL32(0, 120, 215, (int)(alpha * 255)), 4.0f); }
-        draw_list->AddRect(key_pos, key_end, IM_COL32(30, 30, 30, 255), 4.0f);
-        
-        ImVec2 text_size = ImGui::CalcTextSize(key.name.c_str());
-        draw_list->AddText(ImVec2(key_pos.x + (key.size.x - text_size.x) * 0.5f, key_pos.y + (key.size.y - text_size.y) * 0.5f), IM_COL32(220, 220, 220, 255), key.name.c_str());
-    }
-    ImGui::EndChild();
+            ImDrawList* draw_list = ImGui::GetWindowDrawList();
+            ImVec2 p = ImGui::GetCursorScreenPos();
+            float scale = 50.0f; // Base size of a key in pixels
+            
+            for (const auto& key : g_keyboardLayout) {
+                float intensity = g_key_states[key.vkCode]; // 0.0 to 1.0
+                
+                // Color interpolation: Dark Grey -> Neon Purple
+                ImU32 color = ImGui::ColorConvertFloat4ToU32(ImVec4(
+                    0.2f + (0.6f * intensity), // R
+                    0.2f + (0.0f * intensity), // G
+                    0.2f + (0.8f * intensity), // B
+                    1.0f
+                ));
 
-    ImGui::Separator();
+                ImVec2 keyPos = ImVec2(p.x + key.pos.x * scale, p.y + key.pos.y * scale);
+                ImVec2 keySize = ImVec2(key.width * scale - 5, scale - 5); // -5 for gap
 
-    ImGui::BeginChild("Controls", ImVec2(0, 0), false, ImGuiWindowFlags_NoScrollbar);
-    ImGui::Columns(2, "MyColumns", false);
+                // Draw Key Background (Rounded Rect)
+                draw_list->AddRectFilled(keyPos, ImVec2(keyPos.x + keySize.x, keyPos.y + keySize.y), color, 4.0f);
+                
+                // Draw Key Border
+                draw_list->AddRect(keyPos, ImVec2(keyPos.x + keySize.x, keyPos.y + keySize.y), IM_COL32(255, 255, 255, 50), 4.0f);
 
-    // العمود الأيسر: المعلومات
-    ImGui::Text("Information");
-    ImGui::Separator();
-    ImGui::Text("Last Key Pressed: %s", g_last_key_name.c_str());
-    ImGui::Text("Virtual-Key Code: %d", g_last_vk_code);
-    ImGui::Text("Total Presses: %d", g_key_press_count);
-    
-    ImGui::NextColumn();
-
-    // العمود الأيمن: التخصيص
-    ImGui::Text("Key Remapper");
-    ImGui::Separator();
-
-    if (g_remap_state == RemapState::WaitingForFrom) {
-        ImGui::Text("Press the key you want to CHANGE...");
-        if (g_last_vk_code != 0) {
-            from_key = g_last_vk_code;
-            from_key_name = g_last_key_name;
-            g_remap_state = RemapState::None;
+                // Draw Text
+                ImVec2 textSize = ImGui::CalcTextSize(key.label.c_str());
+                ImVec2 textPos = ImVec2(keyPos.x + (keySize.x - textSize.x) * 0.5f, keyPos.y + (keySize.y - textSize.y) * 0.5f);
+                draw_list->AddText(textPos, IM_COL32(255, 255, 255, 255), key.label.c_str());
+            }
+            
+            // Advance cursor to avoid overlap if we add more widgets below
+            ImGui::Dummy(ImVec2(0, 350)); 
+            ImGui::EndTabItem();
         }
-    } else if (g_remap_state == RemapState::WaitingForTo) {
-        ImGui::Text("Press the NEW key...");
-        if (g_last_vk_code != 0) {
-            to_key = g_last_vk_code;
-            to_key_name = g_last_key_name;
-            g_remap_state = RemapState::None;
+
+        // --- Tab 2: Stats & Remap ---
+        if (ImGui::BeginTabItem("Stats & Settings")) {
+            ImGui::Columns(2, "StatCols", false);
+            
+            // Left Column: Stats
+            ImGui::Text("Total Key Presses:");
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0,1,0,1), "%d", g_key_press_count);
+            
+            ImGui::Spacing();
+            
+            ImGui::Text("Last Key Pressed:");
+            ImGui::SameLine(); 
+            ImGui::TextColored(ImVec4(1,1,0,1), "%s (VK: %d)", g_last_key_name.c_str(), g_last_vk_code);
+
+            ImGui::NextColumn();
+            
+            // Right Column: Remap (Placeholder)
+            ImGui::Text("Key Remapper");
+            ImGui::Separator();
+            if (ImGui::Button("Start Remapping")) {
+                // Logic to start remapping flow
+            }
+            ImGui::TextDisabled("Remapping feature is currently a placeholder.");
+            
+            ImGui::Columns(1);
+            ImGui::EndTabItem();
         }
+
+        ImGui::EndTabBar();
     }
 
-    ImGui::Text("From: %s (%d)", from_key_name.c_str(), from_key);
-    if (ImGui::Button("Set 'From' Key")) { g_remap_state = RemapState::WaitingForFrom; g_last_vk_code = 0; }
-    
-    ImGui::Spacing();
-    
-    ImGui::Text("To: %s (%d)", to_key_name.c_str(), to_key);
-    if (ImGui::Button("Set 'To' Key")) { g_remap_state = RemapState::WaitingForTo; g_last_vk_code = 0; }
-
-    ImGui::Spacing();
-    
-    if (ImGui::Button("Apply Mapping")) { AddOrUpdateMapping(from_key, to_key); }
-    
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Text("Current Mappings:");
-    for(const auto& mapping : g_key_mappings){ ImGui::Text("%d -> %d", mapping.first, mapping.second); }
-
-    ImGui::EndChild();
-    
-    ImGui::PopStyleVar();
     ImGui::End();
 }
