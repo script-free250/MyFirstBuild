@@ -7,10 +7,10 @@
 #include "keyboard_hook.h"
 
 // Data
-static ID3D11Device* g_pd3dDevice = NULL;
-static ID3D11DeviceContext* g_pd3dDeviceContext = NULL;
-static IDXGISwapChain* g_pSwapChain = NULL;
-static ID3D11RenderTargetView* g_mainRenderTargetView = NULL;
+static ID3D11Device*            g_pd3dDevice = NULL;
+static ID3D11DeviceContext*     g_pd3dDeviceContext = NULL;
+static IDXGISwapChain*          g_pSwapChain = NULL;
+static ID3D11RenderTargetView*  g_mainRenderTargetView = NULL;
 
 // Forward declarations of helper functions
 bool CreateDeviceD3D(HWND hWnd);
@@ -19,55 +19,42 @@ void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-// Main Entry Point
-int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
+// Main code
+int main(int, char**)
 {
-    // 1. Register Window Class
-    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("ImGui App"), NULL };
-    ::RegisterClassEx(&wc);
+    // Create application window
+    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("MyFirstBuild Pro"), NULL };
+    RegisterClassEx(&wc);
+    HWND hwnd = CreateWindow(wc.lpszClassName, _T("MyFirstBuild Pro - V2.0"), WS_OVERLAPPEDWINDOW, 100, 100, 800, 600, NULL, NULL, wc.hInstance, NULL);
 
-    // 2. Create Window
-    // Note: We use basic style here, functionality is added dynamically
-    HWND hwnd = ::CreateWindow(wc.lpszClassName, _T("Pro Keyboard Utility"), WS_OVERLAPPEDWINDOW, 100, 100, 500, 700, NULL, NULL, wc.hInstance, NULL);
-
-    // Enable Layered Window for Opacity Feature
-    SetWindowLong(hwnd, GWL_EXSTYLE, GetWindowLong(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED);
-    // Initialize opacity to solid
-    SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
-
-    // 3. Initialize Direct3D
+    // Initialize Direct3D
     if (!CreateDeviceD3D(hwnd))
     {
         CleanupDeviceD3D();
-        ::UnregisterClass(wc.lpszClassName, wc.hInstance);
+        UnregisterClass(wc.lpszClassName, wc.hInstance);
         return 1;
     }
 
-    // 4. Show Window
-    ::ShowWindow(hwnd, nCmdShow);
-    ::UpdateWindow(hwnd);
+    // Show the window
+    ShowWindow(hwnd, SW_SHOWDEFAULT);
+    UpdateWindow(hwnd);
 
-    // 5. Setup ImGui
+    // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    
+    // Setup Dear ImGui style
+    SetupStyle(); // Call our custom style from ui.cpp
 
-    // --- Styling: Dark Theme ---
-    ImGui::StyleColorsDark();
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 5.0f;
-    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.1f, 0.1f, 0.13f, 1.0f);
-    style.Colors[ImGuiCol_Header] = ImVec4(0.2f, 0.2f, 0.25f, 1.0f);
-
-    // 6. Setup Platform/Renderer backends
+    // Setup Platform/Renderer backends
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-    // 7. Install Hook
+    [...](asc_slot://start-slot-11)// Install Hooks
     InstallHook();
 
-    // 8. Main Loop
+    // Main loop
     bool done = false;
     while (!done)
     {
@@ -81,38 +68,22 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
         }
         if (done) break;
 
-        // --- Handle Feature: Always On Top ---
-        if (g_always_on_top) {
-            SetWindowPos(hwnd, HWND_TOPMOST, 0,0,0,0, SWP_NOMOVE | SWP_NOSIZE);
-        } else {
-            SetWindowPos(hwnd, HWND_NOTOPMOST, 0,0,0,0, SWP_NOMOVE | SWP_NOSIZE);
-        }
-
-        // --- Handle Feature: Opacity ---
-        // Opacity 0-255. g_window_opacity is 0.0-1.0
-        BYTE alpha = (BYTE)(g_window_opacity * 255.0f);
-        SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
-
-
         // Start the Dear ImGui frame
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // Update Animation Logic
-        UpdateAnimationState();
-
-        // Render Our Custom UI
+        [...](asc_slot://start-slot-13)// Render our UI
         RenderUI();
 
         // Rendering
         ImGui::Render();
-        const float clear_color_with_alpha[4] = { 0.0f, 0.0f, 0.0f, 0.0f }; // Transparent clear for D3D
+        const float clear_color_with_alpha[4] = { 0.1f, 0.1f, 0.12f, 1.0f }; // Dark Background
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-        g_pSwapChain->Present(1, 0); // VSync On
+        g_pSwapChain->Present(1, 0); // VSync Enabled
     }
 
     // Cleanup
@@ -122,13 +93,13 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
     ImGui::DestroyContext();
 
     CleanupDeviceD3D();
-    ::DestroyWindow(hwnd);
-    ::UnregisterClass(wc.lpszClassName, wc.hInstance);
+    DestroyWindow(hwnd);
+    UnregisterClass(wc.lpszClassName, wc.hInstance);
 
     return 0;
 }
 
-// --- DirectX Helper Functions (Standard) ---
+// Helper functions (Standard D3D11 setup code)
 bool CreateDeviceD3D(HWND hWnd)
 {
     DXGI_SWAP_CHAIN_DESC sd;
@@ -178,6 +149,7 @@ void CleanupRenderTarget()
     if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = NULL; }
 }
 
+// Win32 message handler
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -195,10 +167,11 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         return 0;
     case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
+        if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
+            return 0;
         break;
     case WM_DESTROY:
-        ::PostQuitMessage(0);
+        PostQuitMessage(0);
         return 0;
     }
     return ::DefWindowProc(hWnd, msg, wParam, lParam);
