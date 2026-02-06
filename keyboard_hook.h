@@ -1,16 +1,19 @@
 #pragma once
-#include <windows.h>
 #include <map>
 #include <string>
 
-// Global variables for UI and Logic
+// متغيرات مشتركة بين الواجهة والهوك
 extern std::map<int, int> g_key_mappings;
-extern std::map<int, int> g_key_states; // For visual feedback
-extern bool g_is_active; // Master toggle
-extern int g_cps_counter;
-extern float g_current_cps;
+extern std::map<int, int> g_key_states;
+extern int g_key_press_count;
+extern int g_last_vk_code;
+extern std::string g_last_key_name;
 
-// Hook Functions
-void InstallHooks();
-void UninstallHooks();
-void UpdateHooksLogic(); // Called from main loop for timers/CPS calculations
+// متغيرات للتحكم في حالة التخصيص
+enum class RemapState { None, WaitingForFrom, WaitingForTo };
+extern RemapState g_remap_state;
+
+void InstallHook();
+void UninstallHook();
+void AddOrUpdateMapping(int from, int to);
+void UpdateAnimationState();
