@@ -16,8 +16,9 @@ AppState g_app_state = AppState::Dashboard;
 // Wizard Variables
 int g_wiz_source_key = -1;
 int g_wiz_target_key = -1;
-int g_wiz_delay = 100; 
+int g_wiz_delay = 50; 
 bool g_wiz_is_rapid = false;
+bool g_wiz_swap_keys = false; // هل يريد التبديل؟
 
 // Hooks
 HHOOK g_hKeyboardHook = NULL;
@@ -75,7 +76,6 @@ void ProcessRapidFire() {
 }
 
 void UpdateAnimationState() {
-    // تقليل شدة الإضاءة تدريجياً
     for (auto& pair : g_key_states) {
         if (pair.second > 0.0f) {
             pair.second -= 0.05f;
@@ -84,28 +84,31 @@ void UpdateAnimationState() {
     }
 }
 
-// --- Hook Handlers ---
+// --- Hook Logic ---
 bool HandleHook(int vkCode, bool isUp, bool isInjected) {
+    // [CRITICAL FIX] إذا كانت الضغطة من البرنامج نفسه، تجاهلها فوراً لمنع التعليق
     if (isInjected) return false;
 
+    // Wizard Logic
     if (!isUp) {
         if (g_app_state == AppState::Wizard_WaitForOriginal) {
             g_wiz_source_key = vkCode;
             g_app_state = AppState::Wizard_WaitForTarget;
-            return true; 
+            return true; // Block input during setup
         }
         else if (g_app_state == AppState::Wizard_WaitForTarget) {
             g_wiz_target_key = vkCode;
-            g_app_state = AppState::Wizard_Configure; 
+            g_app_state = AppState::Wizard_AskSwap; // Go to Swap Question
             return true; 
         }
     }
 
+    // Main Logic
     if (g_complex_mappings.count(vkCode)) {
         g_physical_key_status[vkCode] = !isUp;
         auto& actions = g_complex_mappings[vkCode];
         
-        if (!isUp) { 
+        if (!isUp) { // Press Down
             bool shouldBlock = false;
             for (auto& action : actions) {
                 if (action.type == ActionType::SinglePress) {
@@ -113,12 +116,12 @@ bool HandleHook(int vkCode, bool isUp, bool isInjected) {
                     g_key_states[action.targetVk] = 1.0f;
                     shouldBlock = true;
                 } else {
-                    shouldBlock = true; 
+                    shouldBlock = true; // Rapid Fire handled in timer
                 }
             }
             return shouldBlock;
         } 
-        else { 
+        else { // Release Up
             bool shouldBlock = false;
             for (auto& action : actions) {
                 if (action.type == ActionType::SinglePress) {
@@ -141,11 +144,13 @@ bool HandleHook(int vkCode, bool isUp, bool isInjected) {
     return false;
 }
 
+// --- System Hooks ---
 LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0) {
         KBDLLHOOKSTRUCT* p = (KBDLLHOOKSTRUCT*)lParam;
         bool isUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
-        if (HandleHook(p->vkCode, isUp, p->flags & LLKHF_INJECTED)) return 1;
+        // LLKHF_INJECTED (0x00000010) Check
+        if (HandleHook(p->vkCode, isUp, (p->flags & LLKHF_INJECTED) != 0)) return 1;
     }
     return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
 }
@@ -154,6 +159,7 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0) {
         MSLLHOOKSTRUCT* p = (MSLLHOOKSTRUCT*)lParam;
         int vk = 0; bool isUp = false;
+        
         if (wParam == WM_LBUTTONDOWN) vk = VK_LBUTTON;
         else if (wParam == WM_LBUTTONUP) { vk = VK_LBUTTON; isUp = true; }
         else if (wParam == WM_RBUTTONDOWN) vk = VK_RBUTTON;
@@ -163,7 +169,8 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
         else if (wParam == WM_XBUTTONDOWN) vk = (HIWORD(p->mouseData) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
         else if (wParam == WM_XBUTTONUP) { vk = (HIWORD(p->mouseData) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2; isUp = true; }
 
-        if (vk != 0 && HandleHook(vk, isUp, p->flags & LLMHF_INJECTED)) return 1;
+        // LLMHF_INJECTED (0x00000001) Check
+        if (vk != 0 && HandleHook(vk, isUp, (p->flags & LLMHF_INJECTED) != 0)) return 1;
     }
     return CallNextHookEx(g_hMouseHook, nCode, wParam, lParam);
 }
@@ -177,7 +184,7 @@ void UninstallHooks() {
     if (g_hMouseHook) UnhookWindowsHookEx(g_hMouseHook);
 }
 
-// --- Render UI (كما هي) ---
+// --- Render UI ---
 void RenderUI() {
     ImGuiStyle& style = ImGui::GetStyle();
     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.1f, 0.1f, 0.12f, 1.0f);
@@ -205,8 +212,6 @@ void RenderUI() {
         ImGui::Text("Active Inputs");
         ImGui::Separator();
         ImGui::TextColored(ImVec4(1,1,0,1), "Last Key: %s", g_last_key_name.c_str());
-        ImGui::Dummy(ImVec2(0, 20));
-        ImGui::Text("Welcome to Ultimate Remapper.");
     }
     else if (tab == 1) {
         ImGui::TextColored(ImVec4(0, 0.8f, 1, 1), "Mapping Configuration Wizard");
@@ -215,33 +220,84 @@ void RenderUI() {
         if (g_app_state == AppState::Dashboard) {
             if (ImGui::Button("+ Create New Map", ImVec2(200, 40))) {
                 g_app_state = AppState::Wizard_WaitForOriginal;
+                g_wiz_swap_keys = false; // Reset
             }
         }
         else if (g_app_state == AppState::Wizard_WaitForOriginal) {
             ImGui::Button("STEP 1: PRESS SOURCE KEY", ImVec2(400, 60));
+            ImGui::Text("Press the button you want to change.");
         }
         else if (g_app_state == AppState::Wizard_WaitForTarget) {
             ImGui::Button("STEP 2: PRESS TARGET ACTION", ImVec2(400, 60));
+            ImGui::Text("Press the button you want to simulate.");
+        }
+        else if (g_app_state == AppState::Wizard_AskSwap) {
+            // New Step: Swap Question
+            ImGui::BeginGroup();
+            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "STEP 3: MAPPING TYPE");
+            ImGui::Text("Source: %s", GetKeyNameSmart(g_wiz_source_key).c_str());
+            ImGui::Text("Target: %s", GetKeyNameSmart(g_wiz_target_key).c_str());
+            ImGui::Dummy(ImVec2(0, 20));
+
+            ImGui::Text("Do you want to SWAP them?");
+            ImGui::TextDisabled("Example: If you chose T -> Y");
+            ImGui::TextDisabled("- SWAP: Pressing T types Y, AND pressing Y types T.");
+            ImGui::TextDisabled("- REMAP: Pressing T types Y. Pressing Y still types Y.");
+
+            ImGui::Dummy(ImVec2(0, 10));
+
+            if (ImGui::Button("NO (Remap Only)", ImVec2(180, 50))) {
+                g_wiz_swap_keys = false;
+                g_app_state = AppState::Wizard_Configure;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("YES (Swap Keys)", ImVec2(180, 50))) {
+                g_wiz_swap_keys = true;
+                g_app_state = AppState::Wizard_Configure;
+            }
+            ImGui::EndGroup();
         }
         else if (g_app_state == AppState::Wizard_Configure) {
             ImGui::Text("Source: %s", GetKeyNameSmart(g_wiz_source_key).c_str());
             ImGui::Text("Target: %s", GetKeyNameSmart(g_wiz_target_key).c_str());
-            ImGui::Separator();
-            ImGui::Text("Mode:");
-            if (ImGui::RadioButton("Single", !g_wiz_is_rapid)) g_wiz_is_rapid = false;
-            ImGui::SameLine();
-            if (ImGui::RadioButton("Rapid Fire", g_wiz_is_rapid)) g_wiz_is_rapid = true;
+            if (g_wiz_swap_keys) ImGui::TextColored(ImVec4(0,1,0,1), "[SWAP MODE ACTIVE]");
             
-            if (g_wiz_is_rapid) {
-                ImGui::SliderInt("Speed (ms)", &g_wiz_delay, 10, 1000);
+            ImGui::Separator();
+            ImGui::Text("Trigger Mode:");
+            if (ImGui::RadioButton("Single Press", !g_wiz_is_rapid)) g_wiz_is_rapid = false;
+            
+            // لا نسمح بالـ Rapid Fire في وضع الـ Swap لمنع التعقيد
+            if (!g_wiz_swap_keys) {
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Rapid Fire (Spam)", g_wiz_is_rapid)) g_wiz_is_rapid = true;
             }
 
-            if (ImGui::Button("Add Map", ImVec2(120, 30))) {
-                KeyAction act;
-                act.targetVk = g_wiz_target_key;
-                act.type = g_wiz_is_rapid ? ActionType::RapidFire : ActionType::SinglePress;
-                act.delayMs = g_wiz_delay;
-                g_complex_mappings[g_wiz_source_key].push_back(act);
+            if (g_wiz_is_rapid) {
+                ImGui::Text("Spam Speed (Milliseconds):");
+                // Range from 1 to 100 as requested
+                ImGui::SliderInt("##Delay", &g_wiz_delay, 1, 100); 
+                if (g_wiz_delay < 10) ImGui::TextColored(ImVec4(1,0,0,1), "Warning: Extremely Fast!");
+            }
+
+            ImGui::Dummy(ImVec2(0, 20));
+
+            if (ImGui::Button("CONFIRM", ImVec2(150, 40))) {
+                // 1. Add Source -> Target
+                KeyAction act1;
+                act1.targetVk = g_wiz_target_key;
+                act1.type = g_wiz_is_rapid ? ActionType::RapidFire : ActionType::SinglePress;
+                act1.delayMs = g_wiz_delay;
+                g_complex_mappings[g_wiz_source_key].push_back(act1);
+
+                // 2. If Swap, Add Target -> Source (Single Press Only)
+                if (g_wiz_swap_keys) {
+                    KeyAction act2;
+                    act2.targetVk = g_wiz_source_key;
+                    act2.type = ActionType::SinglePress; // Always single for swap safety
+                    act2.delayMs = 0;
+                    g_complex_mappings[g_wiz_target_key].push_back(act2);
+                }
+
                 g_app_state = AppState::Dashboard;
             }
         }
@@ -250,7 +306,6 @@ void RenderUI() {
         ImGui::Text("Mappings:");
         for (auto& [src, actions] : g_complex_mappings) {
              if (ImGui::TreeNode(GetKeyNameSmart(src).c_str())) {
-                 int idx = 0;
                  for (auto& a : actions) {
                      ImGui::Text(" -> %s (%s)", GetKeyNameSmart(a.targetVk).c_str(), a.type == ActionType::RapidFire ? "RAPID" : "SINGLE");
                  }
