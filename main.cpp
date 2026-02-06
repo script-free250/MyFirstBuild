@@ -89,9 +89,17 @@ InstallHooks();
         if (done)
             break;
 
-        ImGui_ImplDX11_NewFrame();
-        ImGui_ImplWin32_NewFrame();
-        ImGui::NewFrame();
+   ImGui_ImplDX11_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+
+    // >>>> أضف هذا السطر هنا <<<<
+    ProcessRapidFire(); // هذا هو المسؤول عن تشغيل الـ Rapid Fire
+    // -------------------------
+
+    RenderUI();
+
+    ImGui::Render();
 
         // تحديث الأنيميشن ورسم الواجهة
         UpdateAnimationState();
