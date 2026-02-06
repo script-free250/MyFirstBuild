@@ -3,8 +3,8 @@
 #include "imgui/imgui_impl_dx11.h"
 #include <d3d11.h>
 #include <tchar.h>
-#include "ui.h"
-#include "keyboard_hook.h"
+#include "ui.h"             // ضروري جداً
+#include "keyboard_hook.h"  // ضروري جداً
 
 // --- بيانات DirectX ---
 static ID3D11Device* g_pd3dDevice = NULL;
@@ -16,6 +16,7 @@ bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
+
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -65,14 +66,14 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     
-    // إعداد الستايل الاحترافي
+    // استدعاء الدوال المعرفة الآن في ui.h
     SetupStyle(); 
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
     InstallHook();
-    StartClickerThread(); // بدء خيط النقرات المنفصل (حل مشكلة اللاق)
+    StartClickerThread();
 
     bool done = false;
     const float clear_color_with_alpha[4] = { 0.09f, 0.09f, 0.09f, 1.00f };
@@ -89,12 +90,11 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
         }
         if (done) break;
 
-        // منطق التحديث (Update Logic)
         UpdateLogic();
 
         if (::IsIconic(hwnd))
         {
-            ::Sleep(10); // توفير المعالج عند التصغير
+            ::Sleep(10);
             continue;
         }
 
@@ -102,16 +102,16 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        [...](asc_slot://start-slot-5)RenderUI();
+        RenderUI();
 
-        [...](asc_slot://start-slot-7)ImGui::Render();
+        ImGui::Render();
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         g_pSwapChain->Present(1, 0); 
     }
 
-    StopClickerThread(); // إيقاف الخيط بأمان
+    StopClickerThread();
     UninstallHook();
 
     ImGui_ImplDX11_Shutdown();
