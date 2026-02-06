@@ -5,7 +5,7 @@
 std::map<int, int> g_key_mappings;
 std::map<int, int> g_key_states;
 int g_key_press_count = 0;
-std::string g_last_key_name = "None";
+int g_last_vk_code = 0; // القيمة الافتراضية
 
 static HHOOK g_keyboardHook = NULL;
 
@@ -15,9 +15,7 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
         if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
             // تحديث الواجهة
             g_key_press_count++;
-            char key_name[256];
-            GetKeyNameTextA(p->lParam, key_name, 256);
-            g_last_key_name = key_name;
+            g_last_vk_code = p->vkCode; // --- هذا هو الإصلاح --- نمرر الكود مباشرة
             g_key_states[p->vkCode] = 255; // بدء الأنيميشن
 
             // تنفيذ التخصيص
@@ -57,10 +55,9 @@ void AddOrUpdateMapping(int from, int to) {
     g_key_mappings[from] = to;
 }
 
-// دالة لتحديث حالة الأنيميشن (يتم استدعاؤها من الحلقة الرئيسية)
 void UpdateAnimationState() {
     for (auto it = g_key_states.begin(); it != g_key_states.end(); ) {
-        it->second -= 5; // سرعة خفوت اللون
+        it->second -= 5; 
         if (it->second <= 0) {
             it = g_key_states.erase(it);
         } else {
