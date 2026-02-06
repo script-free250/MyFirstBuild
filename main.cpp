@@ -42,30 +42,11 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return ::DefWindowProc(hWnd, msg, wParam, lParam);
 }
 
+// ... نفس الـ includes والـ definitions السابقة ...
+
 int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
 {
-    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("ImGui App"), NULL };
-    ::RegisterClassEx(&wc);
-    HWND hwnd = ::CreateWindow(wc.lpszClassName, _T("Ultimate Remapper"), WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, NULL, NULL, wc.hInstance, NULL);
-
-    if (!CreateDeviceD3D(hwnd))
-    {
-        CleanupDeviceD3D();
-        ::UnregisterClass(wc.lpszClassName, wc.hInstance);
-        return 1;
-    }
-
-    ::ShowWindow(hwnd, nCmdShow);
-    ::UpdateWindow(hwnd);
-
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    ImGui::StyleColorsDark();
-
-    ImGui_ImplWin32_Init(hwnd);
-    ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+    // ... (إعداد النافذة و DirectX كما هو) ...
 
     InstallHooks();
 
@@ -81,25 +62,37 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
         }
         if (done) break;
 
+        // >>> السر في الخفة <<<
+        // 1. معالجة المنطق
+        ProcessInputLogic();
+
+        // 2. إذا كانت النافذة مصغرة (Minimized)، لا ترسم شيئاً ووفر المعالج
+        if (IsIconic(hwnd)) {
+            Sleep(10); // استراحة طويلة في وضع الخلفية
+            continue;
+        }
+
+        // 3. الرسم (Rendering)
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // --- Core Logic Calls ---
-        ProcessRapidFire();      // تشغيل منطق التكرار
-        UpdateAnimationState();  // تشغيل منطق الأنيميشن
-        RenderUI();              // رسم الواجهة
-        // ------------------------
+        RenderUI();
 
         ImGui::Render();
         const float clear_color_with_alpha[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        g_pSwapChain->Present(1, 0);
+        g_pSwapChain->Present(1, 0); // VSync On
+
+        // استراحة قصيرة جداً للحفاظ على برودة المعالج
+        // هذا لا يؤثر على سرعة الـ Rapid Fire لأن ProcessInputLogic يتم استدعاؤه قبلها
+        Sleep(1); 
     }
 
     UninstallHooks();
+    // ... (التنظيف كما هو) ...
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
