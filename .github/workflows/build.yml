@@ -1,4 +1,4 @@
-name: Build Unicode Windows GUI App (Final)
+name: Build Keyboard Tester App
 
 on:
   push:
@@ -16,13 +16,12 @@ jobs:
     - name: 2. Setup MSVC Developer Command Prompt
       uses: ilammy/msvc-dev-cmd@v1
 
-    # --- الأمر النهائي والمضمون ---
     - name: 3. Compile and Link the program
-      # /ENTRY يخبر اللينكر بنقطة البداية الصحيحة لبرامج Unicode
-      run: cl /utf-8 main.cpp /Fe:my-program.exe /link user32.lib /ENTRY:wWinMainCRTStartup
+      run: cl /utf-8 main.cpp /Fe:keyboard-tester.exe /link user32.lib /ENTRY:wWinMainCRTStartup
 
-    - name: 4. Upload the executable
+    - name: 4. Upload the professional executable
       uses: actions/upload-artifact@v4
       with:
-        name: Windows-GUI-Final
-        path: my-program.exe
+        # اسم جديد احترافي للملف
+        name: Keyboard-Tester-App
+        path: keyboard-tester.exe
