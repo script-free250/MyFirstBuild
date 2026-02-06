@@ -1,0 +1,22 @@
+name: Web-Based Build
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Compile C++ program
+      run: g++ main.cpp -o my-program
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: Web-Built-Executable
+        path: my-program
