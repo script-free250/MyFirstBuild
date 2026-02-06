@@ -1,34 +1,45 @@
 #include "ui.h"
 #include "imgui/imgui.h"
+#include <Windows.h>
+#include <mmsystem.h> // For PlaySound
 #include <string>
 #include <vector>
 #include <map>
 #include <chrono>
 #include <random>
 
-// --- Global Variables & Config ---
+// Link with winmm.lib for sound
+#pragma comment(lib, "winmm.lib")
+
+// --- Constants & Macros ---
+#ifndef MAGIC_SIGNATURE
+#define MAGIC_SIGNATURE 0xFF00AA55 // توقيع للتفريق بين نقرات البرنامج ونقرات المستخدم
+#endif
+
+// --- Structures ---
 struct ClickState {
     bool isDown;
     DWORD nextActionTime;
 };
 
-// Global Config
+// --- Global Config ---
 bool g_jitter_enabled = false;
 int g_jitter_intensity = 2;
 bool g_sound_enabled = false;
 int g_max_cps_limit = 20; // 0 = Unlimited
 int g_current_theme = 0; // 0: Dark, 1: Light, 2: Matrix
 
-// CPS Test Variables
+// --- CPS Test Variables ---
 int g_cps_clicks = 0;
 double g_cps_result = 0.0;
 DWORD g_cps_start_time = 0;
 bool g_cps_active = false;
 
+// --- State Variables ---
 std::map<int, std::vector<KeyAction>> g_complex_mappings;
 std::map<int, bool> g_physical_key_status;
 std::map<int, float> g_key_states;
-std::map<int, ClickState> g_rapid_states; // For Lag Fix
+std::map<int, ClickState> g_rapid_states;
 
 int g_last_vk_code = 0;
 std::string g_last_key_name = "None";
@@ -44,7 +55,8 @@ bool g_wiz_swap_keys = false;
 HHOOK g_hKeyboardHook = NULL;
 HHOOK g_hMouseHook = NULL;
 
-// Helper Random Generator
+// --- Helper Functions ---
+
 int GetRandomInt(int min, int max) {
     static std::mt19937 rng(std::random_device{}());
     std::uniform_int_distribution<int> dist(min, max);
@@ -65,7 +77,7 @@ std::string GetKeyNameSmart(int vkCode) {
     return "VK_" + std::to_string(vkCode);
 }
 
-// --- Anti-Freeze Sender (Optimized) ---
+// --- Anti-Freeze Sender ---
 void ExecuteSendInput(int vkCode, bool isUp) {
     INPUT input = {};
     if (vkCode >= VK_LBUTTON && vkCode <= VK_XBUTTON2) {
@@ -76,7 +88,7 @@ void ExecuteSendInput(int vkCode, bool isUp) {
         else if (vkCode == VK_XBUTTON1) { input.mi.dwFlags = isUp ? MOUSEEVENTF_XUP : MOUSEEVENTF_XDOWN; input.mi.mouseData = XBUTTON1; }
         else if (vkCode == VK_XBUTTON2) { input.mi.dwFlags = isUp ? MOUSEEVENTF_XUP : MOUSEEVENTF_XDOWN; input.mi.mouseData = XBUTTON2; }
         
-        // Jitter Feature (Humanizer)
+        // Jitter Feature
         if (!isUp && g_jitter_enabled) {
             input.mi.dx = GetRandomInt(-g_jitter_intensity, g_jitter_intensity);
             input.mi.dy = GetRandomInt(-g_jitter_intensity, g_jitter_intensity);
@@ -95,22 +107,21 @@ void ExecuteSendInput(int vkCode, bool isUp) {
     
     // Sound Feature
     if (!isUp && g_sound_enabled) {
-        // Play a very short system sound (Async to avoid lag)
-        PlaySound("SystemDefault", NULL, SND_ASYNC | SND_NODEFAULT);
+        // FIX: Use PlaySoundA for explicit char string support
+        PlaySoundA("SystemDefault", NULL, SND_ASYNC | SND_NODEFAULT);
     }
 }
 
-// --- Main Logic (Fixed Lag & Added Features) ---
+// --- Logic ---
 void ProcessInputLogic() {
     DWORD currentTime = GetTickCount();
 
-    // 1. Rapid Fire Logic (Lag Fix: State Machine)
+    // 1. Rapid Fire Logic
     for (auto& [sourceKey, actions] : g_complex_mappings) {
         if (g_physical_key_status[sourceKey]) {
             for (auto& action : actions) {
                 if (action.type == ActionType::RapidFire) {
                     
-                    // Initialize state if not exists
                     if (g_rapid_states.find(action.targetVk) == g_rapid_states.end()) {
                         g_rapid_states[action.targetVk] = { false, 0 };
                     }
@@ -119,41 +130,31 @@ void ProcessInputLogic() {
 
                     if (currentTime >= state.nextActionTime) {
                         if (!state.isDown) {
-                            // PRESS DOWN
                             ExecuteSendInput(action.targetVk, false);
                             state.isDown = true;
-                            // Randomize hold time (human-like) to fix lag
-                            int holdTime = GetRandomInt(20, 40); 
-                            state.nextActionTime = currentTime + holdTime;
-                            
-                            // Visual feedback
+                            state.nextActionTime = currentTime + GetRandomInt(20, 40); 
                             if (g_key_states.count(action.targetVk)) g_key_states[action.targetVk] = 1.0f;
                         } 
                         else {
-                            // RELEASE UP
                             ExecuteSendInput(action.targetVk, true);
                             state.isDown = false;
                             
-                            // Calculate delay for next click based on CPS or Fixed Delay
                             int delay = action.delayMs;
                             if (g_max_cps_limit > 0) {
                                 int minDelay = 1000 / g_max_cps_limit;
                                 if (delay < minDelay) delay = minDelay;
                             }
-                            
-                            // Randomize slightly
-                            int variance = GetRandomInt(0, 10);
-                            state.nextActionTime = currentTime + delay + variance;
+                            state.nextActionTime = currentTime + delay + GetRandomInt(0, 10);
                         }
                     }
                 }
             }
         } else {
-            // Reset states when key is released to prevent stuck keys
+            // Reset states
             for (auto& action : actions) {
                 if (action.type == ActionType::RapidFire) {
                     if (g_rapid_states.count(action.targetVk) && g_rapid_states[action.targetVk].isDown) {
-                         ExecuteSendInput(action.targetVk, true); // Ensure release
+                         ExecuteSendInput(action.targetVk, true);
                          g_rapid_states[action.targetVk].isDown = false;
                     }
                 }
@@ -168,7 +169,7 @@ void ProcessInputLogic() {
     }
 }
 
-// --- Hook Handler ---
+// --- Hook Logic ---
 bool HandleHookLogic(int vkCode, bool isUp) {
     if (!isUp) {
         if (g_app_state == AppState::Wizard_WaitForOriginal) {
@@ -188,12 +189,11 @@ bool HandleHookLogic(int vkCode, bool isUp) {
         auto& actions = g_complex_mappings[vkCode];
         for (auto& action : actions) {
             if (action.type == ActionType::SinglePress) {
-                // Direct pass-through optimized
                 ExecuteSendInput(action.targetVk, isUp);
                 if (!isUp) g_key_states[action.targetVk] = 1.0f;
             }
         }
-        return true; // Block original
+        return true; 
     }
 
     if (!isUp) {
@@ -201,7 +201,6 @@ bool HandleHookLogic(int vkCode, bool isUp) {
         g_last_vk_code = vkCode;
         g_last_key_name = GetKeyNameSmart(vkCode);
         
-        // CPS Test Counter
         if (g_cps_active) {
             if (g_cps_start_time == 0) g_cps_start_time = GetTickCount();
             g_cps_clicks++;
@@ -213,11 +212,10 @@ bool HandleHookLogic(int vkCode, bool isUp) {
             }
         }
     }
-
     return false; 
 }
 
-// --- System Hooks (Standard) ---
+// --- Callbacks ---
 LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0) {
         KBDLLHOOKSTRUCT* p = (KBDLLHOOKSTRUCT*)lParam;
@@ -240,7 +238,7 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
         else if (wParam == WM_MBUTTONDOWN) vk = VK_MBUTTON;
         else if (wParam == WM_MBUTTONUP) { vk = VK_MBUTTON; isUp = true; }
         else if (wParam == WM_XBUTTONDOWN) vk = (HIWORD(p->mouseData) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
-        else if (wParam == WM_XBUTTONUP) { vk = (HIWORD(p->mouseData) == XBUTTON1) ? [...](asc_slot://start-slot-1)VK_XBUTTON1 : VK_XBUTTON2; isUp = true; }
+        else if (wParam == WM_XBUTTONUP) { vk = (HIWORD(p->mouseData) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2; isUp = true; }
         if (vk != 0 && HandleHookLogic(vk, isUp)) return 1;
     }
     return CallNextHookEx(g_hMouseHook, nCode, wParam, lParam);
@@ -250,6 +248,7 @@ void InstallHooks() {
     if (!g_hKeyboardHook) g_hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, GetModuleHandle(NULL), 0);
     if (!g_hMouseHook) g_hMouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseProc, GetModuleHandle(NULL), 0);
 }
+
 void UninstallHooks() {
     if (g_hKeyboardHook) { UnhookWindowsHookEx(g_hKeyboardHook); g_hKeyboardHook = NULL; }
     if (g_hMouseHook) { UnhookWindowsHookEx(g_hMouseHook); g_hMouseHook = NULL; }
@@ -276,7 +275,7 @@ void RenderUI() {
 
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Pro Input Remapper (Fixed & Optimized)", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+    ImGui::Begin("Pro Input Remapper (Fixed)", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
 
     ImGui::Columns(2, "MainLayout", true);
     ImGui::SetColumnWidth(0, 200);
@@ -288,9 +287,9 @@ void RenderUI() {
     ImGui::Dummy(ImVec2(0,10));
     if (ImGui::Button("Dashboard", ImVec2(180, 40))) tab = 0;
     if (ImGui::Button("Mappings", ImVec2(180, 40))) tab = 1;
-    if (ImGui::Button("Features", ImVec2(180, 40))) tab = 2; // New
-    if (ImGui::Button("CPS Test", ImVec2(180, 40))) tab = 3; // New
-    if (ImGui::Button("Settings", ImVec2(180, 40))) tab = 4; // New
+    if (ImGui::Button("Features", ImVec2(180, 40))) tab = 2;
+    if (ImGui::Button("CPS Test", ImVec2(180, 40))) tab = 3;
+    if (ImGui::Button("Settings", ImVec2(180, 40))) tab = 4;
 
     ImGui::NextColumn();
 
@@ -310,7 +309,7 @@ void RenderUI() {
         if (g_max_cps_limit > 0) ImGui::BulletText("CPS Limit: %d", g_max_cps_limit);
         else ImGui::BulletText("CPS Limit: Unlimited");
     }
-    // --- Mappings (Existing) ---
+    // --- Mappings ---
     else if (tab == 1) {
         if (g_app_state == AppState::Dashboard) {
             if (ImGui::Button("+ Create Map", ImVec2(150, 30))) {
@@ -353,7 +352,7 @@ void RenderUI() {
                 if (ImGui::Button(("Del Key##" + std::to_string(it->first)).c_str())) { it = g_complex_mappings.erase(it); ImGui::TreePop(); continue; }
                 int idx=0;
                 for (auto aIt = it->second.begin(); aIt != it->second.end(); ) {
-                    ImGui::Text("-> %s (%s)", GetKeyNameSmart(aIt->targetVk).c_str(), aIt->type == ActionType::RapidFire ? [...](asc_slot://start-slot-3)"RAPID" : "ONE");
+                    ImGui::Text("-> %s (%s)", GetKeyNameSmart(aIt->targetVk).c_str(), aIt->type == ActionType::RapidFire ? "RAPID" : "ONE");
                     ImGui::SameLine(300);
                     if (ImGui::Button(("X##" + std::to_string(it->first) + std::to_string(idx++)).c_str())) aIt = it->second.erase(aIt); else ++aIt;
                 }
@@ -363,53 +362,32 @@ void RenderUI() {
         }
         ImGui::EndChild();
     }
-    // --- Features (New) ---
+    // --- Features ---
     else if (tab == 2) {
         ImGui::Text("Advanced Features");
         ImGui::Separator();
-        
-        ImGui::Checkbox("Enable Jitter (Anti-Recoil Helper)", &g_jitter_enabled);
-        if (g_jitter_enabled) {
-            ImGui::SliderInt("Intensity", &g_jitter_intensity, 1, 10);
-            ImGui::TextDisabled("Randomly moves mouse when clicking.");
-        }
-        
+        ImGui::Checkbox("Enable Jitter", &g_jitter_enabled);
+        if (g_jitter_enabled) ImGui::SliderInt("Intensity", &g_jitter_intensity, 1, 10);
         ImGui::Dummy(ImVec2(0,10));
         ImGui::Checkbox("Enable Click Sound", &g_sound_enabled);
-        
         ImGui::Dummy(ImVec2(0,10));
-        ImGui::Text("Click Rate Limiter (Safety)");
         ImGui::SliderInt("Max CPS", &g_max_cps_limit, 0, 50);
-        if (g_max_cps_limit == 0) ImGui::Text("Status: Unlimited Speed");
-        else ImGui::Text("Status: Capped at %d CPS", g_max_cps_limit);
     }
-    // --- CPS Test (New) ---
+    // --- CPS Test ---
     else if (tab == 3) {
         ImGui::Text("CPS Tester");
         ImGui::Separator();
-        
-        ImGui::Text("Test your click speed below:");
-        
-        // Large Click Area
-        if (ImGui::Button("CLICK HERE\n(Test Area)", ImVec2(400, 200))) {
-            // Logic handled in Hook, but we can visualize here too
-        }
-        
-        if (ImGui::IsItemHovered()) g_cps_active = true;
-        else g_cps_active = false;
-        
+        if (ImGui::Button("CLICK HERE\n(Test Area)", ImVec2(400, 200))) {}
+        if (ImGui::IsItemHovered()) g_cps_active = true; else g_cps_active = false;
         ImGui::Text("Current Speed: %.1f CPS", g_cps_result);
-        ImGui::Text("Clicks in last second: %d", g_cps_clicks);
     }
-    // --- Settings (New) ---
+    // --- Settings ---
     else if (tab == 4) {
         ImGui::Text("Application Settings");
         ImGui::Separator();
-        
-        ImGui::Text("Theme Selection:");
         const char* themes[] = { "Professional Dark", "Clean Light", "Hacker Matrix" };
-        ImGui::Combo("Theme", &g_current_theme, themes, IM_ARRAYSIZE(themes));
+        ImGui::Combo("Theme", &g_current_theme, themes, 3);
     }
 
-    [...](asc_slot://start-slot-5)ImGui::End();
+    ImGui::End();
 }
