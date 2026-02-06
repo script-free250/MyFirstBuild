@@ -1,4 +1,4 @@
-name: Build Windows GUI App (with MSVC)
+name: Build Unicode Windows GUI App
 
 on:
   push:
@@ -13,17 +13,16 @@ jobs:
     - name: 1. Get the code
       uses: actions/checkout@v4
 
-    # خطوة جديدة: إعداد بيئة مترجم مايكروسوفت الرسمي
     - name: 2. Setup MSVC Developer Command Prompt
       uses: ilammy/msvc-dev-cmd@v1
 
-    # خطوة معدلة: البناء باستخدام مترجم مايكروسوفت (cl.exe)
-    - name: 3. Compile the GUI program with MSVC
-      # cl هو المترجم، و /link user32.lib لربط مكتبة الواجهات الرسومية
-      run: cl main.cpp /Fe:my-program.exe /link user32.lib
+    # -- التعديل هنا --
+    - name: 3. Compile the GUI program with Full Unicode Support
+      # /utf-8 يخبر المترجم أن هذا الملف مكتوب بترميز UTF-8
+      run: cl /utf-8 main.cpp /Fe:my-program.exe /link user32.lib
 
     - name: 4. Upload the executable
       uses: actions/upload-artifact@v4
       with:
-        name: Windows-GUI-Executable
+        name: Windows-Unicode-GUI
         path: my-program.exe
