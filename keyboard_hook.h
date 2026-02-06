@@ -1,32 +1,19 @@
 #pragma once
-#include <windows.h>
 #include <map>
 #include <string>
-#include <vector>
 
-// الهياكل
-struct KeyStats {
-    int pressCount = 0;
-};
-
-struct Macro {
-    std::string name;
-    int triggerKey;
-    std::vector<int> sequence;
-};
-
-// المتغيرات العامة
+// متغيرات مشتركة بين الواجهة والهوك
 extern std::map<int, int> g_key_mappings;
-extern std::map<int, KeyStats> g_key_stats;
-extern std::vector<Macro> g_macros;
-extern bool g_game_mode_active;
-extern bool g_turbo_mode_active;
-extern bool g_sound_enabled;
-extern int g_last_pressed_key;
+extern std::map<int, int> g_key_states;
+extern int g_key_press_count;
+extern int g_last_vk_code;
+extern std::string g_last_key_name;
 
-// الدوال (تم تعديل الأسماء لتطابق main.cpp)
-void InstallHooks();       // كان اسمها InstallHook
-void UninstallHooks();     // كان اسمها UninstallHook
-void ProcessInputLogic();  // دالة جديدة مطلوبة
-void SaveSettings();
-void LoadSettings();
+// متغيرات للتحكم في حالة التخصيص
+enum class RemapState { None, WaitingForFrom, WaitingForTo };
+extern RemapState g_remap_state;
+
+void InstallHook();
+void UninstallHook();
+void AddOrUpdateMapping(int from, int to);
+void UpdateAnimationState();
