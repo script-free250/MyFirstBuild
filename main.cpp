@@ -73,7 +73,7 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
     // تثبيت هوك الكيبورد
-    InstallHook();
+InstallHooks();
 
     bool done = false;
     while (!done)
@@ -105,7 +105,7 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
         g_pSwapChain->Present(1, 0);
     }
 
-    UninstallHook();
+UninstallHooks();
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
