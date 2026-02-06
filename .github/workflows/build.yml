@@ -1,4 +1,4 @@
-name: Build Pro Keyboard Tester
+name: Build Ultimate Keyboard Tester
 
 on:
   push:
@@ -16,13 +16,13 @@ jobs:
     - name: 2. Setup MSVC Developer Command Prompt
       uses: ilammy/msvc-dev-cmd@v1
 
-    # --- الإصلاح هنا: تمت إضافة gdi32.lib ---
-    - name: 3. Compile and Link the program
-      # gdi32.lib هي مكتبة الرسومات التي كانت مفقودة
-      run: cl /std:c++17 /utf-8 main.cpp /Fe:pro-keyboard-tester.exe /link user32.lib gdi32.lib /ENTRY:wWinMainCRTStartup
+    - name: 3. Compile and Link the Professional App
+      # gdi32.lib للرسومات، user32.lib للواجهة
+      # /std:c++17 لدعم الميزات الحديثة في الكود
+      run: cl /std:c++17 /EHsc /utf-8 main.cpp /Fe:ultimate-keyboard-tester.exe /link user32.lib gdi32.lib /ENTRY:wWinMainCRTStartup
 
-    - name: 4. Upload the professional executable
+    - name: 4. Upload the final product
       uses: actions/upload-artifact@v4
       with:
-        name: Pro-Keyboard-Tester
-        path: pro-keyboard-tester.exe
+        name: Ultimate-Keyboard-Tester
+        path: ultimate-keyboard-tester.exe
