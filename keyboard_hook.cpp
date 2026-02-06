@@ -62,4 +62,9 @@ void UpdateAnimationState() {
     for (auto it = g_key_states.begin(); it != g_key_states.end(); ) {
         it->second -= 5; // سرعة خفوت اللون
         if (it->second <= 0) {
-
+            it = g_key_states.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
