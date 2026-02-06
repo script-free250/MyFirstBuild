@@ -3,8 +3,8 @@
 #include "imgui/imgui_impl_dx11.h"
 #include <d3d11.h>
 #include <tchar.h>
-#include "keyboard_hook.h" // للتواصل مع الهوك
-#include "ui.h"            // للتواصل مع الواجهة
+#include "keyboard_hook.h"
+#include "ui.h"
 
 // Data
 static ID3D11Device*            g_pd3dDevice = nullptr;
@@ -13,7 +13,7 @@ static IDXGISwapChain*          g_pSwapChain = nullptr;
 static UINT                     g_ResizeWidth = 0, g_ResizeHeight = 0;
 static ID3D11RenderTargetView*  g_mainRenderTargetView = nullptr;
 
-// Forward declarations of helper functions
+// Forward declarations
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
 void CreateRenderTarget();
@@ -23,12 +23,10 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 // Main code
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow)
 {
-    // Create application window
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"MyFirstBuildClass", nullptr };
     ::RegisterClassExW(&wc);
     HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"My First Build", WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, nullptr, nullptr, wc.hInstance, nullptr);
 
-    // Initialize Direct3D
     if (!CreateDeviceD3D(hwnd))
     {
         CleanupDeviceD3D();
@@ -39,7 +37,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     ::ShowWindow(hwnd, nCmdShow);
     ::UpdateWindow(hwnd);
 
-    // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
@@ -48,7 +45,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-    // 🟢 تثبيت الهوك عند البدء
     InstallHooks();
 
     bool done = false;
@@ -64,18 +60,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         }
         if (done) break;
 
-        // 🟢 معالجة المنطق
         ProcessInputLogic();
 
-        // Start the Dear ImGui frame
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // 🟢 رسم الواجهة
         RenderUI();
 
-        // Rendering
         ImGui::Render();
         const float clear_color_with_alpha[4] = { 0.45f, 0.55f, 0.60f, 1.00f };
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
@@ -84,7 +76,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         g_pSwapChain->Present(1, 0); 
     }
 
-    // 🟢 إزالة الهوك عند الخروج
     UninstallHooks();
 
     ImGui_ImplDX11_Shutdown();
@@ -98,7 +89,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     return 0;
 }
 
-// Helper functions (Standard ImGui Boilerplate)
+// Helper functions
 bool CreateDeviceD3D(HWND hWnd)
 {
     DXGI_SWAP_CHAIN_DESC sd;
@@ -159,10 +150,11 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_SIZE:
         if (wParam != SIZE_MINIMIZED)
         {
-            if (g_resizeWidth != (UINT)LOWORD(lParam) || g_resizeHeight != (UINT)HIWORD(lParam))
+            // تصحيح: استخدام g_ResizeWidth بدلاً من g_resizeWidth
+            if (g_ResizeWidth != (UINT)LOWORD(lParam) || g_ResizeHeight != (UINT)HIWORD(lParam))
             {
-                g_resizeWidth = (UINT)LOWORD(lParam);
-                g_resizeHeight = (UINT)HIWORD(lParam);
+                g_ResizeWidth = (UINT)LOWORD(lParam);
+                g_ResizeHeight = (UINT)HIWORD(lParam);
                 CleanupRenderTarget();
                 g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
                 CreateRenderTarget();
