@@ -1,10 +1,7 @@
 #include "ui.h"
 #include "imgui/imgui.h"
 #include "keyboard_hook.h"
-#include <string>
-#include <vector>
-#include <algorithm>
-#include <cstdio> // for sprintf
+#include <cstdio>
 
 static int selected_key_from = 0;
 static int selected_key_to = 0;
@@ -15,9 +12,11 @@ void RenderUI() {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->Pos);
     ImGui::SetNextWindowSize(viewport->Size);
-    ImGui::SetNextWindowFlags(ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBringToFrontOnFocus);
+    
+    // تصحيح: تمرير الـ Flags داخل دالة Begin بدلاً من دالة SetNextWindowFlags غير الموجودة
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    if (ImGui::Begin("MainUI", nullptr)) {
+    if (ImGui::Begin("MainUI", nullptr, window_flags)) {
         ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "MY FIRST BUILD - ULTIMATE KEYBOARD UTILITY");
         ImGui::Separator();
 
