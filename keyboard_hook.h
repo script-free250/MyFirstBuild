@@ -1,38 +1,32 @@
 #pragma once
+#include <windows.h>
 #include <map>
 #include <string>
-#include <windows.h>
 #include <vector>
 
-// ==========================================
-// Global Settings & Features Variables
-// ==========================================
-extern bool g_enable_remap;      // تفعيل/إيقاف التخصيص
-extern bool g_play_sound;        // صوت عند الضغط
-extern bool g_turbo_mode;        // وضع التكرار السريع
-extern bool g_block_key_mode;    // وضع حظر المفاتيح
-extern bool g_map_to_mouse;      // تحويل الكيبورد لماوس
-extern bool g_always_on_top;     // النافذة فوق الجميع
-extern float g_window_opacity;   // شفافية النافذة
-extern int g_key_press_count;    // عداد الضغطات
+// Global structures needed for settings
+struct AppSettings {
+    bool EnableRemap = true;
+    bool EnableAutoClicker = false;
+    bool RandomDelay = false;
+    int MinDelay = 50;
+    int MaxDelay = 100;
+    int ClickCount = 0; // 0 = infinite
+    int ClickMouseButton = 0; // 0=Left, 1=Right, 2=Middle
+    int ToggleKey = VK_F8;
+    bool PlaySounds = true;
+    bool PanicMode = false;
+    int PanicKey = VK_END;
+};
 
-// ==========================================
-// State Variables
-// ==========================================
+extern AppSettings g_Settings;
 extern std::map<int, int> g_key_mappings;
-extern std::map<int, int> g_key_states; // For visual animations
-extern int g_last_vk_code;
-extern std::string g_last_key_name;
+extern bool g_HookActive;
+extern int g_CurrentCPS;
+extern std::vector<std::string> g_Logs;
 
-// حالة عملية التخصيص
-enum class RemapState { None, WaitingForFrom, WaitingForTo };
-extern RemapState g_remap_state;
-
-// ==========================================
-// Functions
-// ==========================================
+// Function declarations
 void InstallHook();
 void UninstallHook();
-void AddOrUpdateMapping(int from, int to);
-void UpdateAnimationState();
-void ResetAll();
+void AddLog(const std::string& msg);
+void ToggleAutoClicker();
