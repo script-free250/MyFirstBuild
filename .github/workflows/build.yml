@@ -1,4 +1,4 @@
-name: Build Keyboard Tester App
+name: Build Pro Keyboard Tester
 
 on:
   push:
@@ -16,12 +16,13 @@ jobs:
     - name: 2. Setup MSVC Developer Command Prompt
       uses: ilammy/msvc-dev-cmd@v1
 
+    # --- الإصلاح هنا: تمت إضافة gdi32.lib ---
     - name: 3. Compile and Link the program
-      run: cl /utf-8 main.cpp /Fe:keyboard-tester.exe /link user32.lib /ENTRY:wWinMainCRTStartup
+      # gdi32.lib هي مكتبة الرسومات التي كانت مفقودة
+      run: cl /std:c++17 /utf-8 main.cpp /Fe:pro-keyboard-tester.exe /link user32.lib gdi32.lib /ENTRY:wWinMainCRTStartup
 
     - name: 4. Upload the professional executable
       uses: actions/upload-artifact@v4
       with:
-        # اسم جديد احترافي للملف
-        name: Keyboard-Tester-App
-        path: keyboard-tester.exe
+        name: Pro-Keyboard-Tester
+        path: pro-keyboard-tester.exe
