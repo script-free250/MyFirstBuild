@@ -3,7 +3,6 @@
 #include <string>
 #include <vector>
 #include <map>
-#include <iostream>
 
 // --- Global Variables Definition ---
 std::map<int, int> g_key_mappings;
@@ -20,12 +19,11 @@ HHOOK g_hKeyboardHook = NULL;
 struct KeyDef {
     std::string label;
     int vkCode;
-    ImVec2 pos; // Relative position (0-15 grid)
-    float width; // Width in grid units
+    ImVec2 pos; 
+    float width; 
 };
 
 // --- QWERTY Layout Definition ---
-// Simplified layout for demonstration
 std::vector<KeyDef> g_keyboardLayout = {
     // Row 1
     {"ESC", VK_ESCAPE, {0,0}, 1}, {"F1", VK_F1, {2,0}, 1}, {"F2", VK_F2, {3,0}, 1}, {"F3", VK_F3, {4,0}, 1}, {"F4", VK_F4, {5,0}, 1},
@@ -50,7 +48,8 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0) {
         KBDLLHOOKSTRUCT* pKey = (KBDLLHOOKSTRUCT*)lParam;
         if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
-            g_key_states[pKey->vkCode] = 1.0f; // Set intensity to Max
+            // Set intensity to Max for animation
+            g_key_states[pKey->vkCode] = 1.0f; 
             g_last_vk_code = pKey->vkCode;
             g_key_press_count++;
             
@@ -78,9 +77,8 @@ void UninstallHook() {
 }
 
 // --- Animation Update ---
-// Call this every frame before rendering
 void UpdateAnimationState() {
-    float decaySpeed = 0.05f; // Speed of fade out
+    float decaySpeed = 0.05f; 
     for (auto& pair : g_key_states) {
         if (pair.second > 0.0f) {
             pair.second -= decaySpeed;
@@ -91,7 +89,7 @@ void UpdateAnimationState() {
 
 // --- Main Render Function ---
 void RenderUI() {
-    // 1. Setup Style (Run once or every frame if dynamic)
+    // 1. Setup Style 
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 8.0f;
     style.FrameRounding = 5.0f;
@@ -115,63 +113,45 @@ void RenderUI() {
 
             ImDrawList* draw_list = ImGui::GetWindowDrawList();
             ImVec2 p = ImGui::GetCursorScreenPos();
-            float scale = 50.0f; // Base size of a key in pixels
+            float scale = 50.0f; 
             
             for (const auto& key : g_keyboardLayout) {
                 float intensity = g_key_states[key.vkCode]; // 0.0 to 1.0
                 
                 // Color interpolation: Dark Grey -> Neon Purple
                 ImU32 color = ImGui::ColorConvertFloat4ToU32(ImVec4(
-                    0.2f + (0.6f * intensity), // R
-                    0.2f + (0.0f * intensity), // G
-                    0.2f + (0.8f * intensity), // B
+                    0.2f + (0.6f * intensity), 
+                    0.2f + (0.0f * intensity), 
+                    0.2f + (0.8f * intensity), 
                     1.0f
                 ));
 
                 ImVec2 keyPos = ImVec2(p.x + key.pos.x * scale, p.y + key.pos.y * scale);
-                ImVec2 keySize = ImVec2(key.width * scale - 5, scale - 5); // -5 for gap
+                ImVec2 keySize = ImVec2(key.width * scale - 5, scale - 5); 
 
-                // Draw Key Background (Rounded Rect)
                 draw_list->AddRectFilled(keyPos, ImVec2(keyPos.x + keySize.x, keyPos.y + keySize.y), color, 4.0f);
-                
-                // Draw Key Border
                 draw_list->AddRect(keyPos, ImVec2(keyPos.x + keySize.x, keyPos.y + keySize.y), IM_COL32(255, 255, 255, 50), 4.0f);
 
-                // Draw Text
                 ImVec2 textSize = ImGui::CalcTextSize(key.label.c_str());
                 ImVec2 textPos = ImVec2(keyPos.x + (keySize.x - textSize.x) * 0.5f, keyPos.y + (keySize.y - textSize.y) * 0.5f);
                 draw_list->AddText(textPos, IM_COL32(255, 255, 255, 255), key.label.c_str());
             }
             
-            // Advance cursor to avoid overlap if we add more widgets below
             ImGui::Dummy(ImVec2(0, 350)); 
             ImGui::EndTabItem();
         }
 
-        // --- Tab 2: Stats & Remap ---
+        // --- Tab 2: Stats ---
         if (ImGui::BeginTabItem("Stats & Settings")) {
             ImGui::Columns(2, "StatCols", false);
-            
-            // Left Column: Stats
             ImGui::Text("Total Key Presses:");
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0,1,0,1), "%d", g_key_press_count);
             
             ImGui::Spacing();
-            
             ImGui::Text("Last Key Pressed:");
             ImGui::SameLine(); 
             ImGui::TextColored(ImVec4(1,1,0,1), "%s (VK: %d)", g_last_key_name.c_str(), g_last_vk_code);
-
-            ImGui::NextColumn();
-            
-            // Right Column: Remap (Placeholder)
-            ImGui::Text("Key Remapper");
-            ImGui::Separator();
-            if (ImGui::Button("Start Remapping")) {
-                // Logic to start remapping flow
-            }
-            ImGui::TextDisabled("Remapping feature is currently a placeholder.");
             
             ImGui::Columns(1);
             ImGui::EndTabItem();
@@ -179,6 +159,5 @@ void RenderUI() {
 
         ImGui::EndTabBar();
     }
-
     ImGui::End();
 }
