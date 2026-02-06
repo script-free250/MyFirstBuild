@@ -3,20 +3,24 @@
 #include "imgui/imgui_impl_dx11.h"
 #include <d3d11.h>
 #include <tchar.h>
-#include "ui.h" // يحتوي على التعريفات الصحيحة الآن
+#include "ui.h" // يحتوي على دوال الهوك والمنطق
 
+// --- بيانات DirectX ---
 static ID3D11Device* g_pd3dDevice = NULL;
 static ID3D11DeviceContext* g_pd3dDeviceContext = NULL;
 static IDXGISwapChain* g_pSwapChain = NULL;
 static ID3D11RenderTargetView* g_mainRenderTargetView = NULL;
 
+// تعريفات الدوال المساعدة
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
 
+// معالج رسائل ويندوز الخارجي (من مكتبة ImGui)
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+// معالج الرسائل الرئيسي
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
@@ -33,7 +37,8 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         return 0;
     case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
+        if ((wParam & 0xfff0) == SC_KEYMENU) // تعطيل قائمة الزر الأيمن في العنوان لمنع التوقف
+            return 0;
         break;
     case WM_DESTROY:
         ::PostQuitMessage(0);
@@ -42,66 +47,111 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return ::DefWindowProc(hWnd, msg, wParam, lParam);
 }
 
-// ... نفس الـ includes والـ definitions السابقة ...
-
+// نقطة الدخول الرئيسية
 int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
 {
-    // ... (إعداد النافذة و DirectX كما هو) ...
+    // 1. إنشاء نافذة التطبيق
+    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("ImGui App"), NULL };
+    ::RegisterClassEx(&wc);
+    HWND hwnd = ::CreateWindow(wc.lpszClassName, _T("Ultimate Input Remapper (Lite)"), WS_OVERLAPPEDWINDOW, 100, 100, 1000, 700, NULL, NULL, wc.hInstance, NULL);
 
+    // 2. تهيئة DirectX
+    if (!CreateDeviceD3D(hwnd))
+    {
+        CleanupDeviceD3D();
+        ::UnregisterClass(wc.lpszClassName, wc.hInstance);
+        return 1;
+    }
+
+    // إظهار النافذة
+    ::ShowWindow(hwnd, nCmdShow);
+    ::UpdateWindow(hwnd);
+
+    // 3. إعداد ImGui
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // تفعيل التنقل بالكيبورد
+
+    // ستايل داكن خفيف
+    ImGui::StyleColorsDark();
+
+    // ربط ImGui بالنظام
+    ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+
+    // 4. تشغيل الهوك (Hooks) - أهم خطوة للعمل
     InstallHooks();
 
+    // 5. الحلقة الرئيسية (The Main Loop)
     bool done = false;
     while (!done)
     {
+        // معالجة رسائل الويندوز (دون انتظار)
         MSG msg;
         while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
         {
             ::TranslateMessage(&msg);
             ::DispatchMessage(&msg);
-            if (msg.message == WM_QUIT) done = true;
+            if (msg.message == WM_QUIT)
+                done = true;
         }
-        if (done) break;
+        if (done)
+            break;
 
-        // >>> السر في الخفة <<<
-        // 1. معالجة المنطق
+        // ---[ CORE LOGIC ]---
+        // تشغيل منطق الأزرار والـ Rapid Fire
+        // يتم استدعاؤه دائماً حتى لو النافذة مصغرة لضمان عمل البرنامج في الخلفية
         ProcessInputLogic();
 
-        // 2. إذا كانت النافذة مصغرة (Minimized)، لا ترسم شيئاً ووفر المعالج
-        if (IsIconic(hwnd)) {
-            Sleep(10); // استراحة طويلة في وضع الخلفية
-            continue;
+        // ---[ OPTIMIZATION ]---
+        // إذا كانت النافذة مصغرة (Minimized)، لا تقم بالرسم لتوفير الـ GPU/CPU
+        if (::IsIconic(hwnd))
+        {
+            // استراحة قصيرة جداً (1ms) للسماح للـ Rapid Fire بالعمل بدقة
+            // دون استهلاك المعالج بنسبة 100%
+            ::Sleep(1); 
+            continue; 
         }
 
-        // 3. الرسم (Rendering)
+        // ---[ RENDERING ]---
+        // الرسم فقط عندما تكون النافذة ظاهرة
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
+        // رسم واجهتنا الخاصة
         RenderUI();
 
+        // إنهاء الإطار وعرضه
         ImGui::Render();
-        const float clear_color_with_alpha[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
+        const float clear_color_with_alpha[4] = { 0.1f, 0.1f, 0.12f, 1.0f }; // لون خلفية هادئ
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        g_pSwapChain->Present(1, 0); // VSync On
+        
+        // Present(1, 0) = VSync On (يمنع ارتفاع الـ FPS واستهلاك الكارت بلا داعي)
+        g_pSwapChain->Present(1, 0);
 
-        // استراحة قصيرة جداً للحفاظ على برودة المعالج
-        // هذا لا يؤثر على سرعة الـ Rapid Fire لأن ProcessInputLogic يتم استدعاؤه قبلها
-        Sleep(1); 
+        // استراحة 1ms لمنع استهلاك المعالج بالكامل في الحلقة
+        ::Sleep(1);
     }
 
-    UninstallHooks();
-    // ... (التنظيف كما هو) ...
+    // 6. التنظيف عند الإغلاق
+    UninstallHooks(); // إزالة الهوك بأمان
+    
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
+
     CleanupDeviceD3D();
     ::DestroyWindow(hwnd);
     ::UnregisterClass(wc.lpszClassName, wc.hInstance);
 
     return 0;
 }
+
+// --- دوال DirectX المساعدة (Boilerplate) ---
 
 bool CreateDeviceD3D(HWND hWnd)
 {
