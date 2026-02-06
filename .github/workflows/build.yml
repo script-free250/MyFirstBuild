@@ -1,4 +1,4 @@
-name: Web-Based Build
+name: Windows Build
 
 on:
   push:
@@ -7,18 +7,20 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # --- التغيير هنا ---
+    # لقد غيرنا النظام إلى ويندوز
+    runs-on: windows-latest
 
     steps:
-    # تم التحديث إلى v4
     - uses: actions/checkout@v4
 
-    - name: Compile C++ program
-      run: g++ main.cpp -o my-program
+    - name: Compile C++ program for Windows
+      # لقد أضفنا .exe إلى اسم الملف الناتج
+      run: g++ main.cpp -o my-program.exe
 
-    # تم التحديث إلى v4
-    - name: Upload artifact
+    - name: Upload Windows artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Web-Built-Executable
-        path: my-program
+        name: Windows-Executable
+        # تأكد من أن المسار يطابق اسم الملف الجديد
+        path: my-program.exe
