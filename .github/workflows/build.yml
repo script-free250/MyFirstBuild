@@ -1,4 +1,4 @@
-name: Build Windows GUI App
+name: Build Windows GUI App (with MSVC)
 
 on:
   push:
@@ -13,13 +13,14 @@ jobs:
     - name: 1. Get the code
       uses: actions/checkout@v4
 
-    # خطوة جديدة لإعداد المترجم بشكل صحيح
-    - name: 2. Set up MinGW C++ compiler
-      uses: egor-tensin/setup-mingw@v2
+    # خطوة جديدة: إعداد بيئة مترجم مايكروسوفت الرسمي
+    - name: 2. Setup MSVC Developer Command Prompt
+      uses: ilammy/msvc-dev-cmd@v1
 
-    - name: 3. Compile the GUI program
-      # -mwindows تخبر المترجم أن هذا برنامج رسومي وليس طرفية
-      run: g++ main.cpp -o my-program.exe -mwindows
+    # خطوة معدلة: البناء باستخدام مترجم مايكروسوفت (cl.exe)
+    - name: 3. Compile the GUI program with MSVC
+      # cl هو المترجم، و /link user32.lib لربط مكتبة الواجهات الرسومية
+      run: cl main.cpp /Fe:my-program.exe /link user32.lib
 
     - name: 4. Upload the executable
       uses: actions/upload-artifact@v4
