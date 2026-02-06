@@ -4,7 +4,7 @@
 #include <d3d11.h>
 #include <tchar.h>
 #include "ui.h" 
-#include "keyboard_hook.h" 
+// REMOVED: #include "keyboard_hook.h" (لأنه تم دمجه في ui.h)
 
 // --- بيانات DirectX ---
 static ID3D11Device* g_pd3dDevice = NULL;
@@ -20,19 +20,25 @@ void CleanupRenderTarget();
 
 // معالج رسائل ويندوز
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
 
-    switch (msg) {
+LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+        return true;
+
+    switch (msg)
+    {
     case WM_SIZE:
-        if (g_pd3dDevice != NULL && wParam != SIZE_MINIMIZED) {
+        if (g_pd3dDevice != NULL && wParam != SIZE_MINIMIZED)
+        {
             CleanupRenderTarget();
             g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
             CreateRenderTarget();
         }
         return 0;
     case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
+        if ((wParam & 0xfff0) == SC_KEYMENU)
+            return 0;
         break;
     case WM_DESTROY:
         ::PostQuitMessage(0);
@@ -41,43 +47,40 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return ::DefWindowProc(hWnd, msg, wParam, lParam);
 }
 
-// نقطة بداية البرنامج الرئيسية
-int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow) {
-    // إنشاء نافذة البرنامج
+int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
+{
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("ImGui App"), NULL };
     ::RegisterClassEx(&wc);
     HWND hwnd = ::CreateWindow(wc.lpszClassName, _T("Ultimate Keyboard Utility"), WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, NULL, NULL, wc.hInstance, NULL);
 
-    // إعداد DirectX
-    if (!CreateDeviceD3D(hwnd)) {
+    if (!CreateDeviceD3D(hwnd))
+    {
         CleanupDeviceD3D();
         ::UnregisterClass(wc.lpszClassName, wc.hInstance);
         return 1;
     }
 
-    // إظهار النافذة
     ::ShowWindow(hwnd, nCmdShow);
     ::UpdateWindow(hwnd);
 
-    // إعداد مكتبة ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    ImGui::StyleColorsDark(); // تفعيل الوضع الداكن
+    ImGui::StyleColorsDark();
 
-    // إعداد المحولات
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
-    
-    // -- تثبيت هوك الكيبورد --
+
+    // تثبيت هوك الكيبورد
     InstallHook();
-    
-    // الحلقة الرئيسية للبرنامج
+
     bool done = false;
-    while (!done) {
+    while (!done)
+    {
         MSG msg;
-        while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE)) {
+        while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
+        {
             ::TranslateMessage(&msg);
             ::DispatchMessage(&msg);
             if (msg.message == WM_QUIT)
@@ -86,32 +89,26 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow) {
         if (done)
             break;
 
-        // بدء إطار ImGui جديد
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
-        
-        // --- تحديث حالة الأنيميشن (مهم جداً) ---
+
+        // تحديث الأنيميشن ورسم الواجهة
         UpdateAnimationState();
-        
-        // --- رسم الواجهة الاحترافية ---
         RenderUI();
 
-        // عرض الإطار النهائي
         ImGui::Render();
         const float clear_color_with_alpha[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        g_pSwapChain->Present(1, 0); 
+        g_pSwapChain->Present(1, 0);
     }
-    
-    // -- إزالة الهوك والتنظيف عند الخروج --
+
     UninstallHook();
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
-
     CleanupDeviceD3D();
     ::DestroyWindow(hwnd);
     ::UnregisterClass(wc.lpszClassName, wc.hInstance);
@@ -119,8 +116,9 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow) {
     return 0;
 }
 
-// --- دوال DirectX الكاملة والصحيحة ---
-bool CreateDeviceD3D(HWND hWnd) {
+// --- دوال DirectX المساعدة ---
+bool CreateDeviceD3D(HWND hWnd)
+{
     DXGI_SWAP_CHAIN_DESC sd;
     ZeroMemory(&sd, sizeof(sd));
     sd.BufferCount = 2;
@@ -147,20 +145,23 @@ bool CreateDeviceD3D(HWND hWnd) {
     return true;
 }
 
-void CleanupDeviceD3D() {
+void CleanupDeviceD3D()
+{
     CleanupRenderTarget();
     if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = NULL; }
     if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = NULL; }
     if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = NULL; }
 }
 
-void CreateRenderTarget() {
+void CreateRenderTarget()
+{
     ID3D11Texture2D* pBackBuffer;
     g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
     g_pd3dDevice->CreateRenderTargetView(pBackBuffer, NULL, &g_mainRenderTargetView);
     pBackBuffer->Release();
 }
 
-void CleanupRenderTarget() {
+void CleanupRenderTarget()
+{
     if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = NULL; }
 }
