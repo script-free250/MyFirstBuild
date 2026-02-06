@@ -3,22 +3,18 @@
 #include "imgui/imgui_impl_dx11.h"
 #include <d3d11.h>
 #include <tchar.h>
-#include "ui.h" 
-// REMOVED: #include "keyboard_hook.h" (لأنه تم دمجه في ui.h)
+#include "ui.h" // يحتوي على التعريفات الصحيحة الآن
 
-// --- بيانات DirectX ---
 static ID3D11Device* g_pd3dDevice = NULL;
 static ID3D11DeviceContext* g_pd3dDeviceContext = NULL;
 static IDXGISwapChain* g_pSwapChain = NULL;
 static ID3D11RenderTargetView* g_mainRenderTargetView = NULL;
 
-// دوال DirectX
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
 
-// معالج رسائل ويندوز
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -37,8 +33,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         return 0;
     case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_KEYMENU)
-            return 0;
+        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
         break;
     case WM_DESTROY:
         ::PostQuitMessage(0);
@@ -51,7 +46,7 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
 {
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("ImGui App"), NULL };
     ::RegisterClassEx(&wc);
-    HWND hwnd = ::CreateWindow(wc.lpszClassName, _T("Ultimate Keyboard Utility"), WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, NULL, NULL, wc.hInstance, NULL);
+    HWND hwnd = ::CreateWindow(wc.lpszClassName, _T("Ultimate Remapper"), WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, NULL, NULL, wc.hInstance, NULL);
 
     if (!CreateDeviceD3D(hwnd))
     {
@@ -72,8 +67,7 @@ int APIENTRY _tWinMain(HINSTANCE hInstance, HINSTANCE, LPTSTR, int nCmdShow)
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-    // تثبيت هوك الكيبورد
-InstallHooks();
+    InstallHooks();
 
     bool done = false;
     while (!done)
@@ -83,27 +77,19 @@ InstallHooks();
         {
             ::TranslateMessage(&msg);
             ::DispatchMessage(&msg);
-            if (msg.message == WM_QUIT)
-                done = true;
+            if (msg.message == WM_QUIT) done = true;
         }
-        if (done)
-            break;
+        if (done) break;
 
-   ImGui_ImplDX11_NewFrame();
-    ImGui_ImplWin32_NewFrame();
-    ImGui::NewFrame();
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
 
-    // >>>> أضف هذا السطر هنا <<<<
-    ProcessRapidFire(); // هذا هو المسؤول عن تشغيل الـ Rapid Fire
-    // -------------------------
-
-    RenderUI();
-
-    ImGui::Render();
-
-        // تحديث الأنيميشن ورسم الواجهة
-        UpdateAnimationState();
-        RenderUI();
+        // --- Core Logic Calls ---
+        ProcessRapidFire();      // تشغيل منطق التكرار
+        UpdateAnimationState();  // تشغيل منطق الأنيميشن
+        RenderUI();              // رسم الواجهة
+        // ------------------------
 
         ImGui::Render();
         const float clear_color_with_alpha[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
@@ -113,7 +99,7 @@ InstallHooks();
         g_pSwapChain->Present(1, 0);
     }
 
-UninstallHooks();
+    UninstallHooks();
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
@@ -124,7 +110,6 @@ UninstallHooks();
     return 0;
 }
 
-// --- دوال DirectX المساعدة ---
 bool CreateDeviceD3D(HWND hWnd)
 {
     DXGI_SWAP_CHAIN_DESC sd;
