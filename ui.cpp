@@ -12,100 +12,160 @@ int g_last_vk_code = 0;
 std::string g_last_key_name = "None";
 AppState g_app_state = AppState::Dashboard;
 
-// متغيرات مؤقتة لعملية تغيير الأزرار
+// متغيرات التغيير المؤقتة
 int g_remap_source_key = -1;
 
+// Hooks Handles
 HHOOK g_hKeyboardHook = NULL;
+HHOOK g_hMouseHook = NULL;
 
-// --- Helper: Get Key Name ---
-std::string GetKeyName(int vkCode) {
+// --- Helper: Get Smart Name (Mouse & Keyboard) ---
+std::string GetKeyNameSmart(int vkCode) {
+    switch (vkCode) {
+        case VK_LBUTTON: return "Mouse Left";
+        case VK_RBUTTON: return "Mouse Right";
+        case VK_MBUTTON: return "Mouse Middle";
+        case VK_XBUTTON1: return "Mouse Side 1";
+        case VK_XBUTTON2: return "Mouse Side 2";
+        default: break;
+    }
+    
     char keyNameBuffer[128];
     UINT scanCode = MapVirtualKey(vkCode, MAPVK_VK_TO_VSC);
     if (GetKeyNameTextA(scanCode << 16, keyNameBuffer, 128)) {
         return std::string(keyNameBuffer);
     }
-    return "Unknown (" + std::to_string(vkCode) + ")";
+    return "VK_" + std::to_string(vkCode);
 }
 
-// --- Low Level Keyboard Hook (The Core Logic) ---
+// --- Smart Input Sender (يحاكي الضغط سواء ماوس أو كيبورد) ---
+void SendSmartInput(int vkCode, bool keyUp) {
+    INPUT input = {};
+    
+    // 1. فحص هل هو ماوس؟
+    if (vkCode == VK_LBUTTON || vkCode == VK_RBUTTON || vkCode == VK_MBUTTON || vkCode == VK_XBUTTON1 || vkCode == VK_XBUTTON2) {
+        input.type = INPUT_MOUSE;
+        if (vkCode == VK_LBUTTON) input.mi.dwFlags = keyUp ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_LEFTDOWN;
+        else if (vkCode == VK_RBUTTON) input.mi.dwFlags = keyUp ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_RIGHTDOWN;
+        else if (vkCode == VK_MBUTTON) input.mi.dwFlags = keyUp ? MOUSEEVENTF_MIDDLEUP : MOUSEEVENTF_MIDDLEDOWN;
+        else if (vkCode == VK_XBUTTON1) {
+            input.mi.dwFlags = keyUp ? MOUSEEVENTF_XUP : MOUSEEVENTF_XDOWN;
+            input.mi.mouseData = XBUTTON1;
+        }
+        else if (vkCode == VK_XBUTTON2) {
+            input.mi.dwFlags = keyUp ? MOUSEEVENTF_XUP : MOUSEEVENTF_XDOWN;
+            input.mi.mouseData = XBUTTON2;
+        }
+    }
+    // 2. إذا كان كيبورد
+    else {
+        input.type = INPUT_KEYBOARD;
+        input.ki.wVk = vkCode;
+        input.ki.dwFlags = keyUp ? KEYEVENTF_KEYUP : 0;
+    }
+
+    SendInput(1, &input, sizeof(INPUT));
+}
+
+// --- Unified Logic Handler ---
+// هذه الدالة تعالج المنطق سواء جاء من الماوس أو الكيبورد
+// return true means "BLOCK ORIGINAL INPUT"
+bool HandleInputEvent(int vkCode, bool isUp, bool isInjected) {
+    if (isInjected) return false; // لا تتدخل في ما أرسلناه نحن
+
+    if (!isUp) { // عند الضغط فقط
+        // 1. Remapping Setup Logic
+        if (g_app_state == AppState::Remapping_WaitForOriginal) {
+            g_remap_source_key = vkCode;
+            g_app_state = AppState::Remapping_WaitForTarget;
+            return true; // Block
+        }
+        else if (g_app_state == AppState::Remapping_WaitForTarget) {
+            if (g_remap_source_key != -1) {
+                g_key_mappings[g_remap_source_key] = vkCode;
+            }
+            g_app_state = AppState::Dashboard;
+            return true; // Block
+        }
+
+        // 2. Active Remapping
+        if (g_key_mappings.count(vkCode)) {
+            int target = g_key_mappings[vkCode];
+            SendSmartInput(target, false); // Press Down
+            
+            g_key_states[target] = 1.0f; // Animation for target
+            return true; // Block original
+        }
+
+        // 3. Visualization
+        g_key_states[vkCode] = 1.0f;
+        g_last_vk_code = vkCode;
+        g_key_press_count++;
+        g_last_key_name = GetKeyNameSmart(vkCode);
+    }
+    else { // عند الرفع (Key Up)
+        if (g_key_mappings.count(vkCode)) {
+            int target = g_key_mappings[vkCode];
+            SendSmartInput(target, true); // Release Up
+            return true; // Block original
+        }
+    }
+    return false;
+}
+
+// --- Keyboard Hook ---
 LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0) {
         KBDLLHOOKSTRUCT* pKey = (KBDLLHOOKSTRUCT*)lParam;
-
-        // 1. تجاهل المفاتيح التي قمنا نحن بإرسالها (لتجنب الدوائر اللانهائية)
-        if (pKey->flags & LLKHF_INJECTED) {
-            return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
-        }
-
-        if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
-            
-            // --- Logic for Remapping Setup (إعداد التغيير) ---
-            if (g_app_state == AppState::Remapping_WaitForOriginal) {
-                g_remap_source_key = pKey->vkCode;
-                g_app_state = AppState::Remapping_WaitForTarget;
-                return 1; // Block key
-            }
-            else if (g_app_state == AppState::Remapping_WaitForTarget) {
-                // حفظ التغيير الجديد
-                if (g_remap_source_key != -1) {
-                    g_key_mappings[g_remap_source_key] = pKey->vkCode;
-                }
-                g_app_state = AppState::Dashboard;
-                return 1; // Block key
-            }
-
-            // --- Logic for Active Remapping (تنفيذ التغيير) ---
-            // هل هذا الزر موجود في قائمة التغييرات؟
-            if (g_key_mappings.count(pKey->vkCode)) {
-                int targetKey = g_key_mappings[pKey->vkCode];
-                
-                // محاكاة الضغط على الزر الجديد
-                INPUT inputs[1] = {};
-                inputs[0].type = INPUT_KEYBOARD;
-                inputs[0].ki.wVk = targetKey;
-                
-                // إرسال Down
-                SendInput(1, inputs, sizeof(INPUT));
-                
-                // (في التطبيق الحقيقي نحتاج معالجة KeyUp أيضاً، لكن هذا للتبسيط)
-                
-                // تحديث الأنيميشن للزر الجديد
-                g_key_states[targetKey] = 1.0f; 
-                
-                return 1; // Block the original key! (منع الزر الأصلي)
-            }
-
-            // Visualizer logic (للعرض فقط)
-            g_key_states[pKey->vkCode] = 1.0f;
-            g_last_vk_code = pKey->vkCode;
-            g_key_press_count++;
-            g_last_key_name = GetKeyName(pKey->vkCode);
-        }
-        else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
-            // معالجة رفع الزر في حالة التغيير
-            if (g_key_mappings.count(pKey->vkCode)) {
-                int targetKey = g_key_mappings[pKey->vkCode];
-                INPUT inputs[1] = {};
-                inputs[0].type = INPUT_KEYBOARD;
-                inputs[0].ki.wVk = targetKey;
-                inputs[0].ki.dwFlags = KEYEVENTF_KEYUP;
-                SendInput(1, inputs, sizeof(INPUT));
-                return 1;
-            }
-        }
+        bool isUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
+        bool isInjected = (pKey->flags & LLKHF_INJECTED);
+        
+        if (HandleInputEvent(pKey->vkCode, isUp, isInjected))
+            return 1;
     }
     return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
 }
 
-void InstallHook() {
-    g_hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, GetModuleHandle(NULL), 0);
+// --- Mouse Hook ---
+LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode >= 0) {
+        MSLLHOOKSTRUCT* pMouse = (MSLLHOOKSTRUCT*)lParam;
+        bool isInjected = (pMouse->flags & LLMHF_INJECTED);
+        
+        int vkCode = 0;
+        bool isUp = false;
+
+        // Map Messages to VK
+        if (wParam == WM_LBUTTONDOWN) vkCode = VK_LBUTTON;
+        else if (wParam == WM_LBUTTONUP) { vkCode = VK_LBUTTON; isUp = true; }
+        else if (wParam == WM_RBUTTONDOWN) vkCode = VK_RBUTTON;
+        else if (wParam == WM_RBUTTONUP) { vkCode = VK_RBUTTON; isUp = true; }
+        else if (wParam == WM_MBUTTONDOWN) vkCode = VK_MBUTTON;
+        else if (wParam == WM_MBUTTONUP) { vkCode = VK_MBUTTON; isUp = true; }
+        else if (wParam == WM_XBUTTONDOWN) {
+            vkCode = (HIWORD(pMouse->mouseData) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
+        }
+        else if (wParam == WM_XBUTTONUP) {
+            vkCode = (HIWORD(pMouse->mouseData) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
+            isUp = true;
+        }
+
+        if (vkCode != 0) {
+            if (HandleInputEvent(vkCode, isUp, isInjected))
+                return 1; 
+        }
+    }
+    return CallNextHookEx(g_hMouseHook, nCode, wParam, lParam);
 }
 
-void UninstallHook() {
-    if (g_hKeyboardHook) {
-        UnhookWindowsHookEx(g_hKeyboardHook);
-        g_hKeyboardHook = NULL;
-    }
+void InstallHooks() {
+    g_hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, GetModuleHandle(NULL), 0);
+    g_hMouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseProc, GetModuleHandle(NULL), 0);
+}
+
+void UninstallHooks() {
+    if (g_hKeyboardHook) { UnhookWindowsHookEx(g_hKeyboardHook); g_hKeyboardHook = NULL; }
+    if (g_hMouseHook) { UnhookWindowsHookEx(g_hMouseHook); g_hMouseHook = NULL; }
 }
 
 void UpdateAnimationState() {
@@ -114,129 +174,108 @@ void UpdateAnimationState() {
     }
 }
 
-// --- UI Styling Helpers ---
-void StyleButton3D(bool active) {
-    if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.2f, 0.2f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-    }
-}
-
-// --- Main Render Logic ---
+// --- UI Rendering ---
 void RenderUI() {
-    // إعداد الستايل العام
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 12.0f;
-    style.ChildRounding = 8.0f;
-    style.FrameRounding = 6.0f;
     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.12f, 0.12f, 0.14f, 1.00f);
-    style.Colors[ImGuiCol_Header] = ImVec4(0.20f, 0.25f, 0.30f, 1.00f);
 
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(900, 600), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(1000, 650), ImGuiCond_FirstUseEver);
 
-    ImGui::Begin("Keyboard Master Control", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+    ImGui::Begin("Ultimate Input Manager", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
 
-    // --- تقسيم الشاشة: قائمة جانبية ومحتوى رئيسي ---
     ImGui::Columns(2, "MainLayout", true);
-    ImGui::SetColumnWidth(0, 250); // عرض القائمة الجانبية
+    ImGui::SetColumnWidth(0, 250);
 
-    // --- Side Bar (القائمة الجانبية) ---
+    // Sidebar
     ImGui::Dummy(ImVec2(0, 20));
-    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "  KEY MASTER");
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "  INPUT MASTER");
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0, 20));
 
     static int selectedTab = 0;
-    if (ImGui::Button("  Dashboard  ", ImVec2(230, 40))) selectedTab = 0;
+    if (ImGui::Button("  Dashboard  ", ImVec2(230, 45))) selectedTab = 0;
     ImGui::Dummy(ImVec2(0, 10));
-    if (ImGui::Button("  Remapper  ", ImVec2(230, 40))) selectedTab = 1;
-    ImGui::Dummy(ImVec2(0, 10));
+    if (ImGui::Button("  Remapper  ", ImVec2(230, 45))) selectedTab = 1;
     
-    // حالة البرنامج
-    ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 100);
-    ImGui::TextDisabled("  Status: Running");
-    ImGui::TextDisabled("  Hook ID: %p", g_hKeyboardHook);
-
     ImGui::NextColumn();
 
-    // --- Main Content Area ---
+    // Main Content
     ImGui::Dummy(ImVec2(0, 10));
     
     if (selectedTab == 0) {
-        // --- Dashboard Tab ---
-        ImGui::Text("Live Input Visualizer");
+        ImGui::Text("Device Visualizer");
         ImGui::Separator();
-        ImGui::Dummy(ImVec2(0, 20));
-
-        // عرض أزرار كبيرة لمحاكاة الكيبورد
+        
         ImDrawList* draw = ImGui::GetWindowDrawList();
         ImVec2 p = ImGui::GetCursorScreenPos();
         
-        // رسم مربع كبير يعبر عن حالة الضغط
-        float boxSize = 100.0f;
+        // --- Draw Keyboard Representation (Simplified) ---
+        draw->AddRect(ImVec2(p.x + 20, p.y + 50), ImVec2(p.x + 320, p.y + 200), IM_COL32(255, 255, 255, 50), 5.0f);
+        draw->AddText(ImVec2(p.x + 30, p.y + 30), IM_COL32(200, 200, 200, 255), "Keyboard Activity");
         
-        // Key Name Display
-        draw->AddRectFilled(p, ImVec2(p.x + 300, p.y + 150), IM_COL32(40, 40, 50, 255), 10.0f);
-        draw->AddText(ImGui::GetFont(), 24.0f, ImVec2(p.x + 20, p.y + 20), IM_COL32(255, 255, 255, 255), "Last Key:");
-        draw->AddText(ImGui::GetFont(), 40.0f, ImVec2(p.x + 40, p.y + 70), IM_COL32(0, 255, 0, 255), g_last_key_name.c_str());
+        // Show last key big
+        if (g_last_vk_code >= 7 && g_last_vk_code < 255) { // Assuming keyboard range mostly
+             draw->AddText(ImGui::GetFont(), 40.0f, ImVec2(p.x + 50, p.y + 100), IM_COL32(0, 255, 255, 255), g_last_key_name.c_str());
+        }
 
-        // Stats Box
-        ImVec2 p2 = ImVec2(p.x + 320, p.y);
-        draw->AddRectFilled(p2, ImVec2(p2.x + 200, p2.y + 150), IM_COL32(50, 40, 40, 255), 10.0f);
-        draw->AddText(ImGui::GetFont(), 20.0f, ImVec2(p2.x + 20, p2.y + 20), IM_COL32(255, 255, 255, 255), "Total Presses:");
-        char countBuf[32]; sprintf_s(countBuf, "%d", g_key_press_count);
-        draw->AddText(ImGui::GetFont(), 40.0f, ImVec2(p2.x + 50, p2.y + 70), IM_COL32(255, 100, 100, 255), countBuf);
+        // --- Draw Mouse Representation ---
+        ImVec2 mPos = ImVec2(p.x + 400, p.y + 50);
+        // Body
+        draw->AddRectFilled(mPos, ImVec2(mPos.x + 120, mPos.y + 180), IM_COL32(40, 40, 45, 255), 40.0f);
+        draw->AddRect(mPos, ImVec2(mPos.x + 120, mPos.y + 180), IM_COL32(100, 100, 100, 255), 40.0f);
+        
+        // Left Button
+        ImU32 colL = (g_key_states[VK_LBUTTON] > 0.1f) ? IM_COL32(0, 255, 0, 255) : IM_COL32(80, 80, 80, 255);
+        draw->AddRectFilled(mPos, ImVec2(mPos.x + 59, mPos.y + 70), colL, 40.0f, ImDrawFlags_RoundCornersTopLeft);
+        
+        // Right Button
+        ImU32 colR = (g_key_states[VK_RBUTTON] > 0.1f) ? IM_COL32(0, 255, 0, 255) : IM_COL32(80, 80, 80, 255);
+        draw->AddRectFilled(ImVec2(mPos.x + 61, mPos.y), ImVec2(mPos.x + 120, mPos.y + 70), colR, 40.0f, ImDrawFlags_RoundCornersTopRight);
 
-    } 
+        // Side Buttons
+        ImU32 colS1 = (g_key_states[VK_XBUTTON1] > 0.1f) ? IM_COL32(255, 165, 0, 255) : IM_COL32(60, 60, 60, 255);
+        draw->AddRectFilled(ImVec2(mPos.x - 10, mPos.y + 80), ImVec2(mPos.x + 5, mPos.y + 110), colS1, 5.0f); // Side 1
+
+        ImU32 colS2 = (g_key_states[VK_XBUTTON2] > 0.1f) ? IM_COL32(255, 165, 0, 255) : IM_COL32(60, 60, 60, 255);
+        draw->AddRectFilled(ImVec2(mPos.x - 10, mPos.y + 50), ImVec2(mPos.x + 5, mPos.y + 75), colS2, 5.0f); // Side 2
+
+        draw->AddText(ImVec2(mPos.x + 20, mPos.y + 200), IM_COL32(200, 200, 200, 255), "Mouse State");
+    }
     else if (selectedTab == 1) {
-        // --- Remapper Tab ---
-        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Key Remapper Configuration");
+        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Universal Remapper (Mouse & Keyboard)");
         ImGui::Separator();
-        ImGui::Dummy(ImVec2(0, 20));
-
-        // State Machine UI
+        
+        // State Machine Messages
         if (g_app_state == AppState::Dashboard) {
-            if (ImGui::Button(" + ADD NEW REMAP ", ImVec2(200, 50))) {
+            if (ImGui::Button(" + ADD NEW MAP ", ImVec2(200, 50))) {
                 g_app_state = AppState::Remapping_WaitForOriginal;
             }
-            ImGui::SameLine();
-            ImGui::TextWrapped("Click to start mapping a key to another.");
         }
         else if (g_app_state == AppState::Remapping_WaitForOriginal) {
-            ImGui::Button(" PRESS KEY TO CHANGE... ", ImVec2(300, 50));
-            ImGui::TextColored(ImVec4(1, 0, 0, 1), "Press the physical key you want to change now.");
+            ImGui::Button(" WAITING INPUT... ", ImVec2(300, 50));
+            ImGui::TextColored(ImVec4(1, 0, 0, 1), "Press ANY Key or Mouse Button to Change.");
         }
         else if (g_app_state == AppState::Remapping_WaitForTarget) {
-            std::string label = " Remap [" + GetKeyName(g_remap_source_key) + "] To... (Press Key)";
+            std::string label = " Remap [" + GetKeyNameSmart(g_remap_source_key) + "] To...";
             ImGui::Button(label.c_str(), ImVec2(400, 50));
-            ImGui::TextColored(ImVec4(0, 1, 0, 1), "Now press the key you want it to become.");
+            ImGui::TextColored(ImVec4(0, 1, 0, 1), "Press ANY Key or Mouse Button for the Result.");
         }
 
-        ImGui::Dummy(ImVec2(0, 30));
-        ImGui::Text("Active Mappings:");
-        ImGui::BeginChild("MappingsList", ImVec2(0, 300), true);
-        
-        // List mappings
+        // List
+        ImGui::Dummy(ImVec2(0, 20));
+        ImGui::Text("Active Configurations:");
+        ImGui::BeginChild("List", ImVec2(0, 300), true);
         std::vector<int> toRemove;
-        for (auto const& [original, target] : g_key_mappings) {
-            ImGui::PushID(original);
-            std::string mapText = GetKeyName(original) + "  -->  " + GetKeyName(target);
-            ImGui::Text(mapText.c_str());
-            ImGui::SameLine(300);
-            if (ImGui::Button("Delete")) {
-                toRemove.push_back(original);
-            }
+        for (auto const& [src, dst] : g_key_mappings) {
+            ImGui::PushID(src);
+            std::string txt = GetKeyNameSmart(src) + "  -->  " + GetKeyNameSmart(dst);
+            ImGui::Text(txt.c_str());
+            ImGui::SameLine(350);
+            if (ImGui::Button("Remove")) toRemove.push_back(src);
             ImGui::PopID();
-            ImGui::Separator();
         }
-
-        // Clean up deleted
-        for (int key : toRemove) g_key_mappings.erase(key);
-
+        for (int k : toRemove) g_key_mappings.erase(k);
         ImGui::EndChild();
     }
 
