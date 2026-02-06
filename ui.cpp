@@ -1,171 +1,117 @@
 #include "ui.h"
 #include "imgui/imgui.h"
-#include <windows.h>
-#include <thread>
-#include <atomic>
-#include <chrono>
-#include <vector>
-#include <string>
 #include "keyboard_hook.h"
+#include <string>
 
-// --- Global Config ---
-struct AppConfig {
-    bool is_running = false;
-    int cps = 10;
-    bool random_interval = false;
-    int random_range = 20;
-    int trigger_key = VK_F1;
-    bool sound_enabled = true;
-    bool always_on_top = false;
-    int click_type = 0; // 0=Left, 1=Right, 2=Middle
-    bool dark_mode = true;
-    long long total_clicks = 0;
-    bool limit_clicks = false;
-    int max_clicks = 1000;
-    bool double_click_fix = false;
-    bool minimize_on_start = false;
-    float ui_scale = 1.0f;
-    char status_msg[128] = "Ready";
-} config;
+// متغيرات مؤقتة للواجهة
+static int current_key_from = 0;
+static int current_key_to = 0;
+static const char* status_msg = "Ready";
 
-std::atomic<bool> g_thread_active = false;
-std::thread g_clicker_thread;
-
-// --- Logic ---
-
-void ClickerLoop() {
-    while (g_thread_active) {
-        if (config.is_running) {
-            if (config.limit_clicks && config.total_clicks >= config.max_clicks) {
-                config.is_running = false;
-                strcpy_s(config.status_msg, "Max clicks reached!");
-                continue;
-            }
-
-            INPUT inputs[2] = { 0 };
-            DWORD flags_down = 0, flags_up = 0;
-
-            if (config.click_type == 0) { flags_down = MOUSEEVENTF_LEFTDOWN; flags_up = MOUSEEVENTF_LEFTUP; }
-            else if (config.click_type == 1) { flags_down = MOUSEEVENTF_RIGHTDOWN; flags_up = MOUSEEVENTF_RIGHTUP; }
-            else { flags_down = MOUSEEVENTF_MIDDLEDOWN; flags_up = MOUSEEVENTF_MIDDLEUP; }
-
-            inputs[0].type = INPUT_MOUSE; inputs[0].mi.dwFlags = flags_down;
-            inputs[1].type = INPUT_MOUSE; inputs[1].mi.dwFlags = flags_up;
-
-            SendInput(2, inputs, sizeof(INPUT));
-            config.total_clicks++;
-
-            if (config.sound_enabled && (config.total_clicks % 5 == 0)) {
-                Beep(400, 10);
-            }
-
-            int base_delay = 1000 / (config.cps > 0 ? config.cps : 1);
-            int final_delay = base_delay;
-            
-            if (config.random_interval) {
-                final_delay += (rand() % (config.random_range * 2)) - config.random_range;
-                if (final_delay < 1) final_delay = 1;
-            }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(final_delay));
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-    }
-}
-
-void StartClickerThread() {
-    g_thread_active = true;
-    g_clicker_thread = std::thread(ClickerLoop);
-}
-
-void StopClickerThread() {
-    g_thread_active = false;
-    if (g_clicker_thread.joinable())
-        g_clicker_thread.join();
-}
-
-void UpdateLogic() {
-    if (GetAsyncKeyState(config.trigger_key) & 0x8000) {
-        config.is_running = !config.is_running;
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        sprintf_s(config.status_msg, config.is_running ? "Running..." : "Stopped");
-    }
-}
-
-// --- UI ---
-
-void SetupStyle() {
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 8.0f;
-    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
-    style.Colors[ImGuiCol_Header] = ImVec4(0.20f, 0.25f, 0.30f, 1.00f);
-    style.Colors[ImGuiCol_Button] = ImVec4(0.25f, 0.40f, 0.60f, 1.00f);
-}
-
-void RenderUI() {
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-    ImGui::Begin("MainPanel", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
-
-    ImGui::Columns(2, "MainLayout", false);
-    ImGui::SetColumnWidth(0, 200);
-
-    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "MY BUILD PRO");
+void RenderUI()
+{
+    // --- Header Section ---
+    ImGui::TextDisabled("UltiMap Pro v2.0");
+    ImGui::SameLine();
+    ImGui::Text("| Total Presses: %d", g_key_press_count);
     ImGui::Separator();
-    
-    static int active_tab = 0;
-    if (ImGui::Button("Clicker", ImVec2(-1, 40))) active_tab = 0;
-    if (ImGui::Button("Remapper", ImVec2(-1, 40))) active_tab = 1;
-    if (ImGui::Button("Settings", ImVec2(-1, 40))) active_tab = 2;
+
+    // --- Control Panel (New Features) ---
+    if (ImGui::CollapsingHeader("Settings & Controls", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::Columns(2, "settings_cols", false); // تقسيم عمودين
+
+        ImGui::Checkbox("Enable Remapping", &g_enable_remap);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle all remapping logic properly.");
+
+        ImGui::Checkbox("Sound Effects", &g_play_sound);
+        ImGui::Checkbox("Turbo Mode (Repeat)", &g_turbo_mode);
+        
+        ImGui::NextColumn();
+        
+        ImGui::Checkbox("Block Key Mode", &g_block_key_mode);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Selected keys will be blocked instead of remapped.");
+
+        ImGui::Checkbox("Always On Top", &g_always_on_top);
+        ImGui::SliderFloat("Opacity", &g_window_opacity, 0.2f, 1.0f);
+        
+        ImGui::Columns(1); // إنهاء التقسيم
+    }
 
     ImGui::Spacing();
-    ImGui::TextDisabled("Status: %s", config.status_msg);
-    ImGui::Text("Clicks: %lld", config.total_clicks);
 
-    ImGui::NextColumn();
-    ImGui::BeginChild("Content", ImVec2(0, 0), true);
+    // --- Remapping Section ---
+    if (ImGui::BeginChild("RemapArea", ImVec2(0, 150), true))
+    {
+        ImGui::Text("Current Key Detector:");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0, 1, 1, 1), "%s (%d)", g_last_key_name.c_str(), g_last_vk_code);
 
-    if (active_tab == 0) {
-        ImGui::Text("Clicker Settings");
         ImGui::Separator();
-        ImGui::SliderInt("CPS", &config.cps, 1, 100);
-        ImGui::Checkbox("Randomize", &config.random_interval);
         
-        const char* click_types[] = { "Left", "Right", "Middle" };
-        ImGui::Combo("Type", &config.click_type, click_types, IM_ARRAYSIZE(click_types));
-
-        if (config.is_running) {
-            if (ImGui::Button("STOP (F1)", ImVec2(150, 50))) config.is_running = false;
-        } else {
-            if (ImGui::Button("START (F1)", ImVec2(150, 50))) config.is_running = true;
+        if (g_remap_state == RemapState::None) {
+            if (ImGui::Button("Add New Mapping", ImVec2(-1, 40))) {
+                g_remap_state = RemapState::WaitingForFrom;
+                status_msg = "Press the key you want to CHANGE...";
+            }
+        } else if (g_remap_state == RemapState::WaitingForFrom) {
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), ">> PRESS SOURCE KEY <<");
+            if (g_last_vk_code != 0) {
+                current_key_from = g_last_vk_code;
+                g_last_vk_code = 0; // Reset
+                g_remap_state = RemapState::WaitingForTo;
+                status_msg = "Now press the TARGET key...";
+            }
+        } else if (g_remap_state == RemapState::WaitingForTo) {
+             ImGui::TextColored(ImVec4(0, 1, 0, 1), ">> PRESS TARGET KEY <<");
+             if (g_last_vk_code != 0) {
+                 current_key_to = g_last_vk_code;
+                 AddOrUpdateMapping(current_key_from, current_key_to);
+                 g_remap_state = RemapState::None;
+                 status_msg = "Mapping Added Successfully!";
+                 g_last_vk_code = 0;
+             }
         }
+        ImGui::Text("Status: %s", status_msg);
     }
-    else if (active_tab == 1) {
-        ImGui::Text("Key Remapper");
-        ImGui::Separator();
-        ImGui::Text("Last Key: %s (%d)", g_last_key_name, g_last_vk_code);
-        
-        if (ImGui::Button(g_waiting_for_remap ? "Press Key..." : "Add New Map")) {
-            g_waiting_for_remap = true;
-        }
-        
-        for (auto const& [key, val] : g_key_mappings) {
-            ImGui::BulletText("%d -> %d", key, val);
-            ImGui::SameLine();
-            if (ImGui::SmallButton(("Del##" + std::to_string(key)).c_str())) {
-                g_key_mappings.erase(key);
-                break;
+    ImGui::EndChild();
+
+    // --- Active Mappings List (Table) ---
+    ImGui::Text("Active Mappings:");
+    if (ImGui::BeginTable("MappingsTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+    {
+        ImGui::TableSetupColumn("Original Key");
+        ImGui::TableSetupColumn("Mapped To");
+        ImGui::TableSetupColumn("Action");
+        ImGui::TableHeadersRow();
+
+        for (auto it = g_key_mappings.begin(); it != g_key_mappings.end(); )
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("%d", it->first);
+
+            ImGui::TableSetColumnIndex(1);
+            if (g_block_key_mode) ImGui::TextColored(ImVec4(1,0,0,1), "BLOCKED");
+            else ImGui::Text("%d", it->second);
+
+            ImGui::TableSetColumnIndex(2);
+            if (ImGui::SmallButton(("Delete##" + std::to_string(it->first)).c_str())) {
+                it = g_key_mappings.erase(it);
+            } else {
+                ++it;
             }
         }
-    }
-    else if (active_tab == 2) {
-        ImGui::Text("Settings");
-        ImGui::Checkbox("Sound", &config.sound_enabled);
-        ImGui::Checkbox("Dark Mode", &config.dark_mode);
-        if (ImGui::Button("Reset")) config.total_clicks = 0;
+        ImGui::EndTable();
     }
 
-    ImGui::EndChild();
-    ImGui::End();
+    // --- Footer Buttons ---
+    ImGui::Spacing();
+    if (ImGui::Button("Reset All", ImVec2(100, 30))) {
+        ResetAll();
+        status_msg = "All mappings cleared.";
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?) Help");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Press 'Add New Mapping' then follow instructions.");
 }
