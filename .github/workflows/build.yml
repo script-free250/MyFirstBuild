@@ -16,10 +16,13 @@ jobs:
     - name: 2. Setup MSVC Developer Command Prompt
       uses: ilammy/msvc-dev-cmd@v1
 
+    # --- هذا هو السطر النهائي الذي يجمع كل شيء ---
     - name: 3. Compile and Link the Professional App
-      # gdi32.lib للرسومات، user32.lib للواجهة
-      # /std:c++17 لدعم الميزات الحديثة في الكود
-      run: cl /std:c++17 /EHsc /utf-8 main.cpp /Fe:ultimate-keyboard-tester.exe /link user32.lib gdi32.lib /ENTRY:wWinMainCRTStartup
+      # /D UNICODE و /D _UNICODE: لإجبار وضع Unicode
+      # gdi32.lib: لإضافة مكتبة الرسومات
+      # /std:c++17: لدعم الميزات الحديثة
+      # /EHsc: للتعامل مع الأخطاء
+      run: cl /std:c++17 /EHsc /utf-8 /D UNICODE /D _UNICODE main.cpp /Fe:ultimate-keyboard-tester.exe /link user32.lib gdi32.lib /ENTRY:wWinMainCRTStartup
 
     - name: 4. Upload the final product
       uses: actions/upload-artifact@v4
