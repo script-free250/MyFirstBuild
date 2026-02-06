@@ -6,28 +6,28 @@
 #include "ui.h"
 #include "keyboard_hook.h"
 
-// Data
+// متغيرات DirectX
 static ID3D11Device*            g_pd3dDevice = NULL;
 static ID3D11DeviceContext*     g_pd3dDeviceContext = NULL;
 static IDXGISwapChain*          g_pSwapChain = NULL;
 static ID3D11RenderTargetView*  g_mainRenderTargetView = NULL;
 
-// Forward declarations of helper functions
+// تعريفات مسبقة
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-// Main code
 int main(int, char**)
 {
-    // Create application window
+    // إنشاء النافذة
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("MyFirstBuild Pro"), NULL };
     RegisterClassEx(&wc);
+    
+    // 8. دعم خاصية Always On Top
     HWND hwnd = CreateWindow(wc.lpszClassName, _T("MyFirstBuild Pro - V2.0"), WS_OVERLAPPEDWINDOW, 100, 100, 800, 600, NULL, NULL, wc.hInstance, NULL);
 
-    // Initialize Direct3D
     if (!CreateDeviceD3D(hwnd))
     {
         CleanupDeviceD3D();
@@ -35,26 +35,21 @@ int main(int, char**)
         return 1;
     }
 
-    // Show the window
     ShowWindow(hwnd, SW_SHOWDEFAULT);
     UpdateWindow(hwnd);
 
-    // Setup Dear ImGui context
+    // تهيئة ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     
-    // Setup Dear ImGui style
-    SetupStyle(); // Call our custom style from ui.cpp
-
-    // Setup Platform/Renderer backends
+    SetupStyle(); // تطبيق الستايل الخاص بنا
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-    [...](asc_slot://start-slot-11)// Install Hooks
+    // تثبيت الهوك عند بدء التشغيل
     InstallHook();
 
-    // Main loop
     bool done = false;
     while (!done)
     {
@@ -68,25 +63,28 @@ int main(int, char**)
         }
         if (done) break;
 
-        // Start the Dear ImGui frame
+        // تطبيق خاصية Always On Top ديناميكياً
+        if (g_Settings.AlwaysOnTop)
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        else
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        [...](asc_slot://start-slot-13)// Render our UI
-        RenderUI();
+        RenderUI(); // رسم الواجهة
 
-        // Rendering
         ImGui::Render();
-        const float clear_color_with_alpha[4] = { 0.1f, 0.1f, 0.12f, 1.0f }; // Dark Background
+        const float clear_color_with_alpha[4] = { 0.1f, 0.1f, 0.12f, 1.0f };
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-        g_pSwapChain->Present(1, 0); // VSync Enabled
+        g_pSwapChain->Present(1, 0); // VSync enabled
     }
 
-    // Cleanup
+    // تنظيف وإغلاق
     UninstallHook();
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
@@ -99,7 +97,7 @@ int main(int, char**)
     return 0;
 }
 
-// Helper functions (Standard D3D11 setup code)
+// دوال DirectX المساعدة (Boilerplate)
 bool CreateDeviceD3D(HWND hWnd)
 {
     DXGI_SWAP_CHAIN_DESC sd;
@@ -128,47 +126,39 @@ bool CreateDeviceD3D(HWND hWnd)
     return true;
 }
 
-void CleanupDeviceD3D()
-{
+void CleanupDeviceD3D() {
     CleanupRenderTarget();
     if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = NULL; }
     if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = NULL; }
     if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = NULL; }
 }
 
-void CreateRenderTarget()
-{
+void CreateRenderTarget() {
     ID3D11Texture2D* pBackBuffer;
     g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
     g_pd3dDevice->CreateRenderTargetView(pBackBuffer, NULL, &g_mainRenderTargetView);
     pBackBuffer->Release();
 }
 
-void CleanupRenderTarget()
-{
+void CleanupRenderTarget() {
     if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = NULL; }
 }
 
-// Win32 message handler
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
+LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
         return true;
 
-    switch (msg)
-    {
+    switch (msg) {
     case WM_SIZE:
-        if (g_pd3dDevice != NULL && wParam != SIZE_MINIMIZED)
-        {
+        if (g_pd3dDevice != NULL && wParam != SIZE_MINIMIZED) {
             CleanupRenderTarget();
             g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
             CreateRenderTarget();
         }
         return 0;
     case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
-            return 0;
+        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
         break;
     case WM_DESTROY:
         PostQuitMessage(0);
