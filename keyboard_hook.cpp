@@ -3,10 +3,10 @@
 #include <string>
 #include <map>
 
-// المتغيرات العامة
+// تعريف المتغيرات (يجب أن تتطابق مع extern في الهيدر)
 std::map<int, int> g_key_mappings;
 int g_last_vk_code = 0;
-char g_last_key_name[64] = "None"; // استخدام مصفوفة ثابتة بدلاً من std::string لتسريع الهوك
+char g_last_key_name[64] = "None"; 
 bool g_waiting_for_remap = false;
 static HHOOK g_keyboardHook = NULL;
 
@@ -14,34 +14,29 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION) {
         KBDLLHOOKSTRUCT* p = (KBDLLHOOKSTRUCT*)lParam;
         
-        // فقط عند الضغط لتجنب التكرار غير الضروري
         if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
             g_last_vk_code = p->vkCode;
             
-            // تحديث الاسم فقط إذا طلبته الواجهة لتخفيف العبء (أو بشكل سريع)
+            // تحديث اسم المفتاح
             GetKeyNameTextA(p->scanCode << 16, g_last_key_name, sizeof(g_last_key_name));
 
-            // وضع الانتظار للتخصيص
             if (g_waiting_for_remap) {
-                return 1; // منع المفتاح
+                return 1; // منع المفتاح أثناء انتظار التعيين
             }
 
             // تطبيق الـ Remap
             if (g_key_mappings.count(p->vkCode)) {
                 int newVkCode = g_key_mappings[p->vkCode];
-                
-                // الحماية من الـ Loop (إذا كان المفتاح المعين هو نفسه المضغوط)
                 if (newVkCode != p->vkCode) {
                     INPUT input = { 0 };
                     input.type = INPUT_KEYBOARD;
                     input.ki.wVk = (WORD)newVkCode;
                     SendInput(1, &input, sizeof(INPUT));
-                    return 1; // إلغاء المفتاح الأصلي
+                    return 1;
                 }
             }
         }
         
-        // معالجة رفع المفتاح
         if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
             if (g_key_mappings.count(p->vkCode) && !g_waiting_for_remap) {
                 int newVkCode = g_key_mappings[p->vkCode];
