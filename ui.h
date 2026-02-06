@@ -1,37 +1,28 @@
 #pragma once
-#include <map>
-#include <string>
-#include <vector>
-#include <windows.h>
 #include "imgui/imgui.h"
 
-// التوقيع السري لتمييز ضغطات برنامجنا (يمنع التعليق نهائياً)
-#define MAGIC_SIGNATURE 0xFF99
+// المتغيرات العامة للتحكم في البرنامج
+struct Config {
+    // Rapid Fire
+    bool enableRapidFire = false;
+    int rapidFireCPS = 10;
+    bool rapidFireActive = false; // حالة التفعيل أثناء الضغط
 
-enum class ActionType { SinglePress, RapidFire };
+    // Jitter
+    bool enableJitter = false;
+    float jitterIntensity = 1.0f;
 
-struct KeyAction {
-    int targetVk;       
-    ActionType type;    
-    int delayMs;        
-    DWORD lastExecutionTime = 0; 
+    // CPS Test
+    bool cpsTestRunning = false;
+    int cpsClicks = 0;
+    float cpsTimer = 0.0f;
+    float finalCPS = 0.0f;
+    
+    // Settings
+    bool enableSound = true;
 };
 
-// Global Data
-extern std::map<int, std::vector<KeyAction>> g_complex_mappings;
-extern std::map<int, bool> g_physical_key_status; // حالة الزر الحقيقية (إصبع المستخدم)
-extern std::map<int, float> g_key_states;
-extern int g_last_vk_code;
-extern std::string g_last_key_name;
+extern Config g_Config;
 
-enum class AppState {
-    Dashboard, Wizard_WaitForOriginal, Wizard_WaitForTarget, Wizard_Configure        
-};
-extern AppState g_app_state;
-
-void InstallHooks();
-void UninstallHooks();
-void ProcessInputLogic(); 
 void RenderUI();
-
-std::string GetKeyNameSmart(int vkCode);
+void ApplyStyle();
