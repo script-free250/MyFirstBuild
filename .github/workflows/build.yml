@@ -1,4 +1,4 @@
-name: Windows Build
+name: Build Windows GUI App
 
 on:
   push:
@@ -7,20 +7,22 @@ on:
 
 jobs:
   build:
-    # --- التغيير هنا ---
-    # لقد غيرنا النظام إلى ويندوز
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - name: 1. Get the code
+      uses: actions/checkout@v4
 
-    - name: Compile C++ program for Windows
-      # لقد أضفنا .exe إلى اسم الملف الناتج
-      run: g++ main.cpp -o my-program.exe
+    # خطوة جديدة لإعداد المترجم بشكل صحيح
+    - name: 2. Set up MinGW C++ compiler
+      uses: egor-tensin/setup-mingw@v2
 
-    - name: Upload Windows artifact
+    - name: 3. Compile the GUI program
+      # -mwindows تخبر المترجم أن هذا برنامج رسومي وليس طرفية
+      run: g++ main.cpp -o my-program.exe -mwindows
+
+    - name: 4. Upload the executable
       uses: actions/upload-artifact@v4
       with:
-        name: Windows-Executable
-        # تأكد من أن المسار يطابق اسم الملف الجديد
+        name: Windows-GUI-Executable
         path: my-program.exe
