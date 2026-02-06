@@ -17,6 +17,9 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
 
     - name: Compile and Link the Professional App
+      # --- هذا هو الإصلاح الحاسم ---
+      # shell: cmd يخبر GitHub باستخدام لغة الأوامر الصحيحة
+      shell: cmd
       run: |
         cl /std:c++17 /EHsc /utf-8 /D UNICODE /D _UNICODE ^
         main.cpp ui.cpp keyboard_hook.cpp ^
