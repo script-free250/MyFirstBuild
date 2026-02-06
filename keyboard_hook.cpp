@@ -1,93 +1,82 @@
+#include <windows.h>
 #include "keyboard_hook.h"
-#include <thread>
-#include <chrono>
+#include <string>
+#include <map>
 
-// تعريف LLKHF_INJECTED يدوياً لتجنب الأخطاء
-#ifndef LLKHF_INJECTED
-#define LLKHF_INJECTED 0x00000010
-#endif
-
-// تهيئة المتغيرات
+// المتغيرات العامة
 std::map<int, int> g_key_mappings;
-std::map<int, KeyStats> g_key_stats;
-std::vector<Macro> g_macros;
-bool g_game_mode_active = false;
-bool g_turbo_mode_active = false;
-bool g_sound_enabled = false;
-int g_last_pressed_key = 0;
-
+int g_last_vk_code = 0;
+char g_last_key_name[64] = "None"; // استخدام مصفوفة ثابتة بدلاً من std::string لتسريع الهوك
+bool g_waiting_for_remap = false;
 static HHOOK g_keyboardHook = NULL;
-
-void PlayMacro(std::vector<int> sequence) {
-    std::thread([sequence]() {
-        for (int vk : sequence) {
-            INPUT input = { 0 };
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = (WORD)vk;
-            SendInput(1, &input, sizeof(INPUT));
-            Sleep(50); 
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
-            Sleep(50);
-        }
-    }).detach();
-}
 
 LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION) {
         KBDLLHOOKSTRUCT* p = (KBDLLHOOKSTRUCT*)lParam;
-
-        if (p->flags & LLKHF_INJECTED) {
-            return CallNextHookEx(g_keyboardHook, nCode, wParam, lParam);
-        }
-
+        
+        // فقط عند الضغط لتجنب التكرار غير الضروري
         if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
-            g_last_pressed_key = p->vkCode;
-            g_key_stats[p->vkCode].pressCount++;
+            g_last_vk_code = p->vkCode;
+            
+            // تحديث الاسم فقط إذا طلبته الواجهة لتخفيف العبء (أو بشكل سريع)
+            GetKeyNameTextA(p->scanCode << 16, g_last_key_name, sizeof(g_last_key_name));
 
-            if (g_sound_enabled) Beep(500, 50);
-
-            if (g_game_mode_active && (p->vkCode == VK_LWIN || p->vkCode == VK_RWIN)) return 1;
-
-            for (const auto& macro : g_macros) {
-                if (macro.triggerKey == p->vkCode) {
-                    PlayMacro(macro.sequence);
-                    return 1; 
-                }
+            // وضع الانتظار للتخصيص
+            if (g_waiting_for_remap) {
+                return 1; // منع المفتاح
             }
 
+            // تطبيق الـ Remap
             if (g_key_mappings.count(p->vkCode)) {
-                int target = g_key_mappings[p->vkCode];
-                if (target == -1) return 1;
-                INPUT input = { 0 };
-                input.type = INPUT_KEYBOARD;
-                input.ki.wVk = (WORD)target;
-                SendInput(1, &input, sizeof(INPUT));
-                return 1;
+                int newVkCode = g_key_mappings[p->vkCode];
+                
+                // الحماية من الـ Loop (إذا كان المفتاح المعين هو نفسه المضغوط)
+                if (newVkCode != p->vkCode) {
+                    INPUT input = { 0 };
+                    input.type = INPUT_KEYBOARD;
+                    input.ki.wVk = (WORD)newVkCode;
+                    SendInput(1, &input, sizeof(INPUT));
+                    return 1; // إلغاء المفتاح الأصلي
+                }
+            }
+        }
+        
+        // معالجة رفع المفتاح
+        if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
+            if (g_key_mappings.count(p->vkCode) && !g_waiting_for_remap) {
+                int newVkCode = g_key_mappings[p->vkCode];
+                if (newVkCode != p->vkCode) {
+                    INPUT input = { 0 };
+                    input.type = INPUT_KEYBOARD;
+                    input.ki.wVk = (WORD)newVkCode;
+                    input.ki.dwFlags = KEYEVENTF_KEYUP;
+                    SendInput(1, &input, sizeof(INPUT));
+                    return 1;
+                }
             }
         }
     }
     return CallNextHookEx(g_keyboardHook, nCode, wParam, lParam);
 }
 
-// تعديل الأسماء هنا لتطابق Header و Main
-void InstallHooks() {
+void InstallHook() {
     if (!g_keyboardHook)
         g_keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(NULL), 0);
 }
 
-void UninstallHooks() {
+void UninstallHook() {
     if (g_keyboardHook) {
         UnhookWindowsHookEx(g_keyboardHook);
         g_keyboardHook = NULL;
     }
 }
 
-// الدالة المفقودة
-void ProcessInputLogic() {
-    // يمكن وضع منطق إضافي هنا يتم تنفيذه كل فريم
-    // حالياً نتركها فارغة لأن المعالجة تتم داخل الـ Hook
+void AddMapping(int from, int to) {
+    if (from != 0 && to != 0 && from != to) {
+        g_key_mappings[from] = to;
+    }
 }
 
-void SaveSettings() {}
-void LoadSettings() {}
+void ClearMappings() {
+    g_key_mappings.clear();
+}
