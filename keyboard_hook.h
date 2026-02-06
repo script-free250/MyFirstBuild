@@ -1,19 +1,30 @@
 #pragma once
 #include <map>
 #include <string>
+#include <vector>
+#include <iostream>
 
-// متغيرات مشتركة بين الواجهة والهوك
+// --- الهياكل البيانات ---
+struct KeyStats {
+    int pressCount = 0;
+};
+
+struct Macro {
+    std::string name;
+    int triggerKey;
+    std::vector<int> sequence;
+};
+
+// --- المتغيرات العامة ---
 extern std::map<int, int> g_key_mappings;
-extern std::map<int, int> g_key_states;
-extern int g_key_press_count;
-extern int g_last_vk_code;
-extern std::string g_last_key_name;
-
-// متغيرات للتحكم في حالة التخصيص
-enum class RemapState { None, WaitingForFrom, WaitingForTo };
-extern RemapState g_remap_state;
-
+extern std::map<int, KeyStats> g_key_stats;
+extern std::vector<Macro> g_macros;
+extern bool g_game_mode_active;
+extern bool g_turbo_mode_active;
+extern bool g_sound_enabled;
+extern int g_last_pressed_key;
+// دوال التحكم
 void InstallHook();
 void UninstallHook();
-void AddOrUpdateMapping(int from, int to);
-void UpdateAnimationState();
+void SaveSettings();
+void LoadSettings();
