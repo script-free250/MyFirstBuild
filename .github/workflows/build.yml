@@ -16,10 +16,10 @@ jobs:
     - name: 2. Setup MSVC Developer Command Prompt
       uses: ilammy/msvc-dev-cmd@v1
 
-    # -- التعديل هنا --
+    # --- هذا هو السطر الذي تم إصلاحه ---
     - name: 3. Compile the GUI program with Full Unicode Support
-      # /utf-8 يخبر المترجم أن هذا الملف مكتوب بترميز UTF-8
-      run: cl /utf-8 main.cpp /Fe:my-program.exe /link user32.lib
+      # /D UNICODE و /D _UNICODE يخبران المترجم أننا في "وضع Unicode"
+      run: cl /utf-8 /D UNICODE /D _UNICODE main.cpp /Fe:my-program.exe /link user32.lib
 
     - name: 4. Upload the executable
       uses: actions/upload-artifact@v4
