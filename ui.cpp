@@ -328,4 +328,103 @@ void RenderUI() {
 
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Pro 
+    ImGui::Begin("Pro Input Remapper (Ultra Smooth)", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+
+    ImGui::Columns(2, "MainLayout", true);
+    ImGui::SetColumnWidth(0, 200);
+
+    ImGui::TextColored(ImVec4(0.0f, 0.8f, 0.5f, 1.0f), " ULTIMATE PRO");
+    ImGui::Separator();
+
+    static int tab = 0;
+    ImGui::Dummy(ImVec2(0,10));
+    if (ImGui::Button("Dashboard", ImVec2(180, 40))) tab = 0;
+    if (ImGui::Button("Mappings", ImVec2(180, 40))) tab = 1;
+    if (ImGui::Button("Features", ImVec2(180, 40))) tab = 2;
+    if (ImGui::Button("CPS Test", ImVec2(180, 40))) tab = 3;
+    if (ImGui::Button("Settings", ImVec2(180, 40))) tab = 4;
+
+    ImGui::NextColumn();
+
+    if (tab == 0) {
+        ImGui::Text("Status:");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0,1,0,1), "Threaded & Optimized");
+        ImGui::Spacing();
+        ImGui::Text("Last Key: %s", g_last_key_name.c_str());
+        
+        ImGui::Separator();
+        ImGui::Text("Active Modules:");
+        if (g_jitter_enabled) ImGui::BulletText("Jitter (Humanizer)");
+        if (g_sound_enabled) ImGui::BulletText("Audio Feedback");
+    }
+    else if (tab == 1) {
+        if (g_app_state == AppState::Dashboard) {
+            if (ImGui::Button("+ Create Map", ImVec2(150, 30))) {
+                g_app_state = AppState::Wizard_WaitForOriginal;
+                g_wiz_swap_keys = false;
+            }
+        }
+        else if (g_app_state == AppState::Wizard_WaitForOriginal) ImGui::Button("PRESS SOURCE KEY...", ImVec2(300, 50));
+        else if (g_app_state == AppState::Wizard_WaitForTarget) ImGui::Button("PRESS TARGET KEY...", ImVec2(300, 50));
+        else if (g_app_state == AppState::Wizard_Configure) {
+            ImGui::Text("%s -> %s", GetKeyNameSmart(g_wiz_source_key).c_str(), GetKeyNameSmart(g_wiz_target_key).c_str());
+            ImGui::Checkbox("Swap Keys?", &g_wiz_swap_keys);
+            if (!g_wiz_swap_keys) {
+                ImGui::RadioButton("Single", (int*)&g_wiz_is_rapid, 0); ImGui::SameLine();
+                ImGui::RadioButton("Rapid", (int*)&g_wiz_is_rapid, 1);
+                if (g_wiz_is_rapid) ImGui::SliderInt("Speed (ms)", &g_wiz_delay, 15, 1000); // Min 15ms safe
+            }
+            if (ImGui::Button("Save Map")) {
+                std::lock_guard<std::mutex> lock(g_map_mutex);
+                KeyAction act1; act1.targetVk = g_wiz_target_key;
+                act1.type = g_wiz_is_rapid ? ActionType::RapidFire : ActionType::SinglePress;
+                act1.delayMs = g_wiz_delay;
+                g_complex_mappings[g_wiz_source_key].push_back(act1);
+                if (g_wiz_swap_keys) {
+                    KeyAction act2; act2.targetVk = g_wiz_source_key;
+                    act2.type = ActionType::SinglePress; act2.delayMs = 0;
+                    g_complex_mappings[g_wiz_target_key].push_back(act2);
+                }
+                g_app_state = AppState::Dashboard;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) g_app_state = AppState::Dashboard;
+        }
+        
+        ImGui::Separator();
+        ImGui::BeginChild("List", ImVec2(0, 300), true);
+        
+        // Safe list iteration
+        {
+            std::lock_guard<std::mutex> lock(g_map_mutex);
+            for (auto it = g_complex_mappings.begin(); it != g_complex_mappings.end(); ) {
+                if (it->second.empty()) { it = g_complex_mappings.erase(it); continue; }
+                if (ImGui::TreeNode(GetKeyNameSmart(it->first).c_str())) {
+                    ImGui::SameLine(200);
+                    if (ImGui::Button(("Del##" + std::to_string(it->first)).c_str())) { it = g_complex_mappings.erase(it); ImGui::TreePop(); continue; }
+                    ImGui::TreePop();
+                }
+                ++it;
+            }
+        }
+        ImGui::EndChild();
+    }
+    else if (tab == 2) {
+        ImGui::Checkbox("Enable Jitter", &g_jitter_enabled);
+        if (g_jitter_enabled) ImGui::SliderInt("Intensity", &g_jitter_intensity, 1, 10);
+        ImGui::Checkbox("Enable Sound", &g_sound_enabled);
+        ImGui::SliderInt("Max CPS", &g_max_cps_limit, 0, 50);
+    }
+    else if (tab == 3) {
+        if (ImGui::Button("CLICK HERE", ImVec2(400, 200))) {}
+        if (ImGui::IsItemHovered()) g_cps_active = true; else g_cps_active = false;
+        ImGui::Text("Speed: %.1f CPS", g_cps_result);
+    }
+    else if (tab == 4) {
+        const char* themes[] = { "Dark", "Light", "Matrix" };
+        ImGui::Combo("Theme", &g_current_theme, themes, 3);
+    }
+
+    ImGui::End();
+}
