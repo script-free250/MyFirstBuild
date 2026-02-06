@@ -1,169 +1,140 @@
-#include <windows.h>
-#include <stdio.h>
 #include "keyboard_hook.h"
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <random>
 
-// ==========================================
-// Global Variable Definitions
-// ==========================================
+HHOOK hKeyboardHook = NULL;
+HHOOK hMouseHook = NULL;
+
 std::map<int, int> g_key_mappings;
-std::map<int, int> g_key_states;
-int g_key_press_count = 0;
-int g_last_vk_code = 0;
-std::string g_last_key_name = "None";
-RemapState g_remap_state = RemapState::None;
+AppSettings g_Settings;
+bool g_HookActive = false;
+bool g_AutoClickerRunning = false;
+int g_CurrentCPS = 0;
+std::vector<std::string> g_Logs;
 
-// Feature Defaults
-bool g_enable_remap = true;
-bool g_play_sound = false;
-bool g_turbo_mode = false;
-bool g_block_key_mode = false;
-bool g_map_to_mouse = false;
-bool g_always_on_top = false;
-float g_window_opacity = 1.0f;
+// Helper to log messages
+void AddLog(const std::string& msg) {
+    if (g_Logs.size() > 100) g_Logs.erase(g_Logs.begin());
+    g_Logs.push_back(msg);
+}
 
-static HHOOK g_keyboardHook = NULL;
+// Auto Clicker Thread Function
+void AutoClickerThread() {
+    static int clicksThisSecond = 0;
+    static auto lastTime = std::chrono::steady_clock::now();
 
-// ==========================================
-// Low Level Keyboard Hook Procedure
-// ==========================================
+    while (g_AutoClickerRunning && !g_Settings.PanicMode) {
+        // Calculate logic for mouse button
+        DWORD flagsDown = MOUSEEVENTF_LEFTDOWN;
+        DWORD flagsUp = MOUSEEVENTF_LEFTUP;
+        
+        if (g_Settings.ClickMouseButton == 1) { flagsDown = MOUSEEVENTF_RIGHTDOWN; flagsUp = MOUSEEVENTF_RIGHTUP; }
+        else if (g_Settings.ClickMouseButton == 2) { flagsDown = MOUSEEVENTF_MIDDLEDOWN; flagsUp = MOUSEEVENTF_MIDDLEUP; }
+
+        // Send Input (Injected)
+        INPUT inputs[2] = {};
+        inputs[0].type = INPUT_MOUSE;
+        inputs[0].mi.dwFlags = flagsDown;
+        inputs[1].type = INPUT_MOUSE;
+        inputs[1].mi.dwFlags = flagsUp;
+
+        SendInput(2, inputs, sizeof(INPUT));
+
+        clicksThisSecond++;
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - lastTime).count() >= 1) {
+            g_CurrentCPS = clicksThisSecond;
+            clicksThisSecond = 0;
+            lastTime = now;
+        }
+
+        // Delay logic
+        int delay = g_Settings.MinDelay;
+        if (g_Settings.RandomDelay) {
+            static std::random_device rd;
+            static std::mt19937 gen(rd());
+            std::uniform_int_distribution<> distr(g_Settings.MinDelay, g_Settings.MaxDelay);
+            delay = distr(gen);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+    }
+    g_CurrentCPS = 0;
+}
+
+void ToggleAutoClicker() {
+    if (g_AutoClickerRunning) {
+        g_AutoClickerRunning = false;
+        AddLog("[System] Auto Clicker Stopped.");
+        if(g_Settings.PlaySounds) Beep(500, 100);
+    } else {
+        g_AutoClickerRunning = true;
+        AddLog("[System] Auto Clicker Started.");
+        if(g_Settings.PlaySounds) Beep(1000, 100);
+        std::thread(AutoClickerThread).detach();
+    }
+}
+
+// Keyboard Hook Procedure
 LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION) {
-        KBDLLHOOKSTRUCT* p = (KBDLLHOOKSTRUCT*)lParam;
+        KBDLLHOOKSTRUCT* pKey = (KBDLLHOOKSTRUCT*)lParam;
 
-        // [CRITICAL FIX] 
-        // تجاهل الأحداث التي تم إرسالها بواسطة البرنامج نفسه (Injected)
-        // هذا يمنع الدخول في حلقة مفرغة ويحل مشكلة اللاج تماماً
-        if (p->flags & LLKHF_INJECTED) {
-            return CallNextHookEx(g_keyboardHook, nCode, wParam, lParam);
+        // Ignore injected keys to prevent loops/lag
+        if (pKey->flags & LLKHF_INJECTED) {
+            return CallNextHookEx(hKeyboardHook, nCode, wParam, lParam);
         }
 
-        if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
-            g_key_press_count++;
-            g_last_vk_code = p->vkCode;
-
-            // 1. Get Key Name safely
-            char key_name[64];
-            int scanCode = (p->scanCode & 0xFF);
-            if (p->flags & LLKHF_EXTENDED) scanCode |= 0x100;
-            if (GetKeyNameTextA(scanCode << 16, key_name, sizeof(key_name)) == 0) {
-                wsprintfA(key_name, "VK_%d", p->vkCode);
-            }
-            g_last_key_name = key_name;
-
-            // 2. Update Visual Animation
-            g_key_states[p->vkCode] = 255;
-
-            // 3. Feature: Sound Effect
-            if (g_play_sound) {
-                // صوت خفيف جداً وغير مزعج لعدم تعطيل الأداء
-                Beep(800, 10); 
-            }
-
-            // 4. Setup Mode Blocking
-            if (g_remap_state != RemapState::None) {
-                return 1; // منع المفتاح أثناء الإعداد
-            }
-
-            // 5. Global Disable Check
-            if (!g_enable_remap) {
-                return CallNextHookEx(g_keyboardHook, nCode, wParam, lParam);
-            }
-
-            // 6. Mapping Logic
-            if (g_key_mappings.count(p->vkCode)) {
-                int target = g_key_mappings[p->vkCode];
-
-                // Feature: Block Key
-                if (g_block_key_mode || target == -1) {
-                    return 1; // Block original
-                }
-
-                // Feature: Map to Mouse (Example: Left Click)
-                if (g_map_to_mouse && target == VK_LBUTTON) {
-                    INPUT input = { 0 };
-                    input.type = INPUT_MOUSE;
-                    input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-                    SendInput(1, &input, sizeof(INPUT));
-                    return 1;
-                }
-
-                // Standard Keyboard Remap
-                INPUT input = { 0 };
-                input.type = INPUT_KEYBOARD;
-                input.ki.wVk = target;
-                input.ki.wScan = MapVirtualKey(target, MAPVK_VK_TO_VSC);
-                // Note: We don't set KEYUP here
-                SendInput(1, &input, sizeof(INPUT));
-
-                // Feature: Turbo Mode (Repeat extra time)
-                if (g_turbo_mode) {
-                    SendInput(1, &input, sizeof(INPUT));
-                }
-
-                return 1; // Block original key
-            }
+        // Handle Panic Key
+        if (wParam == WM_KEYDOWN && pKey->vkCode == (DWORD)g_Settings.PanicKey) {
+            g_Settings.PanicMode = true;
+            g_AutoClickerRunning = false;
+            UninstallHook(); // Safe exit
+            AddLog("[URGENT] PANIC MODE ACTIVATED!");
+            return CallNextHookEx(hKeyboardHook, nCode, wParam, lParam);
         }
-        
-        // Handle Key Up to prevent "stuck" keys
-        if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
-             if (g_enable_remap && g_key_mappings.count(p->vkCode)) {
-                int target = g_key_mappings[p->vkCode];
+
+        // Handle Toggle Key
+        if (wParam == WM_KEYDOWN && pKey->vkCode == (DWORD)g_Settings.ToggleKey) {
+            ToggleAutoClicker();
+            return 1; // Block key if needed, or return CallNextHookEx to pass it
+        }
+
+        // Handle Remapping
+        if (g_Settings.EnableRemap && wParam == WM_KEYDOWN) {
+            if (g_key_mappings.find(pKey->vkCode) != g_key_mappings.end()) {
+                int newKey = g_key_mappings[pKey->vkCode];
                 
-                if (g_block_key_mode || target == -1) return 1;
-
-                if (g_map_to_mouse && target == VK_LBUTTON) {
-                    INPUT input = { 0 };
-                    input.type = INPUT_MOUSE;
-                    input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
-                    SendInput(1, &input, sizeof(INPUT));
-                    return 1;
-                }
-
+                // Simulate new key
                 INPUT input = { 0 };
                 input.type = INPUT_KEYBOARD;
-                input.ki.wVk = target;
-                input.ki.wScan = MapVirtualKey(target, MAPVK_VK_TO_VSC);
-                input.ki.dwFlags = KEYEVENTF_KEYUP;
+                input.ki.wVk = newKey;
                 SendInput(1, &input, sizeof(INPUT));
-                return 1;
+                
+                // Log and Block original key
+                AddLog("[Remap] Key " + std::to_string(pKey->vkCode) + " -> " + std::to_string(newKey));
+                return 1; 
             }
         }
     }
-    return CallNextHookEx(g_keyboardHook, nCode, wParam, lParam);
+    return CallNextHookEx(hKeyboardHook, nCode, wParam, lParam);
 }
 
 void InstallHook() {
-    if (!g_keyboardHook)
-        g_keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(NULL), 0);
+    if (!hKeyboardHook) {
+        hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(NULL), 0);
+        g_HookActive = (hKeyboardHook != NULL);
+        if (g_HookActive) AddLog("Hooks Installed Successfully.");
+        else AddLog("Failed to install Hooks!");
+    }
 }
 
 void UninstallHook() {
-    if (g_keyboardHook) {
-        UnhookWindowsHookEx(g_keyboardHook);
-        g_keyboardHook = NULL;
+    if (hKeyboardHook) {
+        UnhookWindowsHookEx(hKeyboardHook);
+        hKeyboardHook = NULL;
+        g_HookActive = false;
+        AddLog("Hooks Uninstalled.");
     }
-}
-
-void AddOrUpdateMapping(int from, int to) {
-    if (from != 0 && to != 0) {
-        g_key_mappings[from] = to;
-    }
-}
-
-void UpdateAnimationState() {
-    for (auto it = g_key_states.begin(); it != g_key_states.end(); ) {
-        it->second -= 15; // سرعة اختفاء الألوان
-        if (it->second <= 0) {
-            it = g_key_states.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}
-
-void ResetAll() {
-    g_key_mappings.clear();
-    g_key_press_count = 0;
-    g_block_key_mode = false;
-    g_turbo_mode = false;
 }
