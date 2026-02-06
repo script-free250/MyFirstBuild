@@ -1,0 +1,19 @@
+#pragma once
+#include <map>
+#include <string>
+
+// متغيرات مشتركة بين الواجهة والهوك
+extern std::map<int, int> g_key_mappings;
+extern std::map<int, int> g_key_states;
+extern int g_key_press_count;
+extern int g_last_vk_code;
+extern std::string g_last_key_name;
+
+// متغيرات للتحكم في حالة التخصيص
+enum class RemapState { None, WaitingForFrom, WaitingForTo };
+extern RemapState g_remap_state;
+
+void InstallHook();
+void UninstallHook();
+void AddOrUpdateMapping(int from, int to);
+void UpdateAnimationState();
