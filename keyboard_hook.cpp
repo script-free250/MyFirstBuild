@@ -5,7 +5,9 @@
 std::map<int, int> g_key_mappings;
 std::map<int, int> g_key_states;
 int g_key_press_count = 0;
-int g_last_vk_code = 0; // القيمة الافتراضية
+int g_last_vk_code = 0;
+std::string g_last_key_name = "None";
+RemapState g_remap_state = RemapState::None;
 
 static HHOOK g_keyboardHook = NULL;
 
@@ -13,10 +15,19 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION) {
         KBDLLHOOKSTRUCT* p = (KBDLLHOOKSTRUCT*)lParam;
         if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
-            // تحديث الواجهة
             g_key_press_count++;
-            g_last_vk_code = p->vkCode; // --- هذا هو الإصلاح --- نمرر الكود مباشرة
-            g_key_states[p->vkCode] = 255; // بدء الأنيميشن
+            g_last_vk_code = p->vkCode;
+            
+            char key_name[64];
+            GetKeyNameTextA(p->scanCode << 16, key_name, sizeof(key_name));
+            g_last_key_name = key_name;
+
+            // إذا كنا ننتظر ضغطة مفتاح للتخصيص
+            if (g_remap_state != RemapState::None) {
+                return 1; // امنع المفتاح من المرور أثناء التخصيص
+            }
+
+            g_key_states[p->vkCode] = 255;
 
             // تنفيذ التخصيص
             if (g_key_mappings.count(p->vkCode)) {
@@ -52,7 +63,9 @@ void UninstallHook() {
 }
 
 void AddOrUpdateMapping(int from, int to) {
-    g_key_mappings[from] = to;
+    if (from != 0 && to != 0) {
+        g_key_mappings[from] = to;
+    }
 }
 
 void UpdateAnimationState() {
